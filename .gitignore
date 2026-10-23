@@ -1,2 +1,7 @@
 *.o
 *.png
+result*
+biome-thingy
+chunk-save-logger
+pollution-exporter
+tile-history
