@@ -54,6 +54,7 @@ void parseTag(string name_in, uint8_t tag, const uint8_t *nbt, int *pos, const n
   {
     uint8_t value = nbt[(*pos)++];
     if (verbose) printf("tag1 '%s' == %d / 0x%x\n", name_in.c_str(), value, value);
+    if (cb && cb->tag1) cb->tag1(cb, name_in, value);
     break;
   }
   case 2: // 16bit int

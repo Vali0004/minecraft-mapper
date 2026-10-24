@@ -69,6 +69,33 @@ void Chunk::updateAddBlocks(int section_num, const uint8_t data[16][16][8]) {
   }
 }
 
+void Chunk::updateData(int section_num, const uint8_t data[16][16][8]) {
+  ensureSection(section_num);
+  Section *section = sections[section_num];
+  if (section->has_data16) return;
+  for (int x=0; x<16; x++) {
+    for (int y=0; y<16; y++) {
+      for (int z=0; z<16; z++) {
+        uint8_t byte = data[y][z][x/2];
+        section->meta[x][y][z] = (x % 2) == 0 ? (byte & 0xf) : (byte >> 4);
+      }
+    }
+  }
+}
+
+void Chunk::updateData16(int section_num, const uint16_t data[16][16][16]) {
+  ensureSection(section_num);
+  Section *section = sections[section_num];
+  section->has_data16 = true;
+  for (int x=0; x<16; x++) {
+    for (int y=0; y<16; y++) {
+      for (int z=0; z<16; z++) {
+        section->meta[x][y][z] = ntohs(data[y][z][x]);
+      }
+    }
+  }
+}
+
 void Chunk::printSection(int section_num) {
   ensureSection(section_num);
   Section *section = sections[section_num];
@@ -84,36 +111,48 @@ void Chunk::printSection(int section_num) {
   }
 }
 
-void Chunk::getTopMostBlocks(uint16_t toplayer[16][16], const set<string> &ignoredBlocks, const std::map<int32_t,std::string> &blockMap) {
-  //puts("checking for top-most");
+uint16_t Chunk::blockAt(int x, int y, int z) const {
+  const Section *section = sections[y >> 4];
+  return section ? section->blocks[x][y & 15][z] : 0;
+}
+
+void Chunk::getTopMostBlocks(uint16_t toplayer[16][16], uint16_t topmeta[16][16], uint8_t height[16][16], const set<string> &ignoredBlocks, const std::map<int32_t,std::string> &blockMap, int startY, bool skipSolid) {
+  auto ignored = [&](uint16_t block) {
+    if (block == 0) return true; // air
+    auto name = blockMap.find(block);
+    return name != blockMap.end() && ignoredBlocks.count(name->second);
+  };
 
   for (int x=0; x<16; x++) {
     for (int z=0; z<16; z++) {
-      //printf("%d,%d\n", x, z);
-      for (int section_num=15; section_num>=0; section_num--) {
-        //printf("in section %d\n", section_num);
-        Section *section = sections[section_num];
-        if (!section) continue;
-
-        for (int y=15; y>=0; y--) {
-          //printf("sect %d y %d\n", section_num, y);
-          if (section->blocks[x][y][z] == 0) continue; // ignore air
-
-          auto name = blockMap.find(section->blocks[x][y][z]);
-          if (name != blockMap.end()) {
-            auto ignored = ignoredBlocks.find(name->second);
-            if (ignored != ignoredBlocks.end()) continue;
-          }
-
-          toplayer[x][z] = section->blocks[x][y][z];
-          goto skip;
-        }
+      toplayer[x][z] = 0;
+      topmeta[x][z] = 0;
+      height[x][z] = 0;
+      int y = startY;
+      if (skipSolid) {
+        // down through the roof, then through the open space below it
+        while (y >= 0 && ignored(blockAt(x, y, z))) y--;
+        while (y >= 0 && !ignored(blockAt(x, y, z))) y--;
       }
-skip:
-      ;
+      for (; y >= 0; y--) {
+        uint16_t block = blockAt(x, y, z);
+        if (ignored(block)) continue;
+        toplayer[x][z] = block;
+        topmeta[x][z] = sections[y >> 4]->meta[x][y & 15][z];
+        height[x][z] = y;
+        break;
+      }
     }
   }
-  //puts("done finding top-most");
+}
+
+int Chunk::coverHeight(int x, int z, const vector<uint8_t> &notCover) const {
+  for (int y = 255; y >= 0; y--) {
+    uint16_t block = blockAt(x, y, z);
+    if (block == 0 || (block < notCover.size() && notCover[block])) continue;
+    return y;
+  }
+  return -1;
 }
 
 void Chunk::reset() {

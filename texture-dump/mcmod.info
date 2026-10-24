@@ -1,0 +1,7 @@
+[{
+  "modid": "mapper-texturedump",
+  "name": "Mapper Texture Dump",
+  "description": "Dumps the top face texture of every block for minecraft-mapper's textured view",
+  "version": "1.0",
+  "mcversion": "1.7.10"
+}]

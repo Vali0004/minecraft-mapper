@@ -16,7 +16,7 @@
     apps.${system} = builtins.mapAttrs (name: drv: {
       type = "app";
       program = "${drv}/bin/${name}";
-    }) apps';
+    }) (removeAttrs apps' [ "map-viewer" ]);
 
     devShells.${system}.default = pkgs.mkShell {
       inputsFrom = builtins.attrValues apps';

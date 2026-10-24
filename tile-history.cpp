@@ -1,154 +1,18 @@
-// keeps a history of biome-thingy's rendered tiles in sqlite
-//
-// every `ingest` creates a snapshot, but only stores tiles whose contents changed since
-// the previous version of that tile. the map at snapshot N is: for every path, the newest
-// version with snapshot_id <= N (a NULL png means the tile was deleted)
+// keeps a history of biome-thingy's rendered tiles in sqlite, see tile_db.cpp
 #include <chrono>
 #include <filesystem>
 #include <iostream>
-#include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
 #include <string>
 #include <unistd.h>
 
+#include "metrics_http.h"
+#include "tile_db.h"
 #include "utils.h"
 
 using namespace std;
 using namespace filesystem;
-
-static const char *schema = R"(
-PRAGMA journal_mode = WAL;
-CREATE TABLE IF NOT EXISTS snapshots (
-  id INTEGER PRIMARY KEY,
-  taken_at INTEGER NOT NULL, -- unix seconds
-  note TEXT
-);
-CREATE TABLE IF NOT EXISTS tile_versions (
-  path TEXT NOT NULL,         -- relative to the render dir, e.g. DIM-1/r.0.0.png
-  snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
-  png BLOB,                   -- NULL = tile removed
-  PRIMARY KEY (path, snapshot_id)
-) WITHOUT ROWID;
--- last seen mtime/size per tile, so ingest can skip files without reading them
-CREATE TABLE IF NOT EXISTS tile_state (
-  path TEXT PRIMARY KEY,
-  mtime INTEGER NOT NULL,
-  size INTEGER NOT NULL
-) WITHOUT ROWID;
-)";
-
-struct Db {
-  sqlite3 *db = nullptr;
-  Db(const string &p) {
-    if (sqlite3_open(p.c_str(), &db) != SQLITE_OK) die("open");
-    sqlite3_busy_timeout(db, 10000);
-    exec(schema);
-  }
-  ~Db() { sqlite3_close(db); }
-  [[noreturn]] void die(const char *what) {
-    fprintf(stderr, "sqlite %s: %s\n", what, sqlite3_errmsg(db));
-    exit(1);
-  }
-  void exec(const char *sql) {
-    char *err = nullptr;
-    if (sqlite3_exec(db, sql, nullptr, nullptr, &err) != SQLITE_OK) {
-      fprintf(stderr, "sqlite: %s\n", err);
-      exit(1);
-    }
-  }
-  sqlite3_stmt *prep(const char *sql) {
-    sqlite3_stmt *s;
-    if (sqlite3_prepare_v2(db, sql, -1, &s, nullptr) != SQLITE_OK) die("prepare");
-    return s;
-  }
-};
-
-static int64_t mtime_ns(const path &p) {
-  return chrono::duration_cast<chrono::nanoseconds>(last_write_time(p).time_since_epoch()).count();
-}
-
-static void ingest(Db &db, const path &dir, const char *note) {
-  db.exec("BEGIN IMMEDIATE");
-  sqlite3_stmt *snap = db.prep("INSERT INTO snapshots (taken_at, note) VALUES (?, ?)");
-  sqlite3_bind_int64(snap, 1, time(nullptr));
-  if (note) sqlite3_bind_text(snap, 2, note, -1, SQLITE_TRANSIENT);
-  if (sqlite3_step(snap) != SQLITE_DONE) db.die("insert snapshot");
-  sqlite3_finalize(snap);
-  int64_t sid = sqlite3_last_insert_rowid(db.db);
-
-  sqlite3_stmt *state = db.prep("SELECT mtime, size FROM tile_state WHERE path = ?");
-  sqlite3_stmt *latest = db.prep("SELECT png FROM tile_versions WHERE path = ? ORDER BY snapshot_id DESC LIMIT 1");
-  sqlite3_stmt *ins = db.prep("INSERT INTO tile_versions (path, snapshot_id, png) VALUES (?, ?, ?)");
-  sqlite3_stmt *upd = db.prep("INSERT OR REPLACE INTO tile_state (path, mtime, size) VALUES (?, ?, ?)");
-  db.exec("CREATE TEMP TABLE seen (path TEXT PRIMARY KEY) WITHOUT ROWID");
-  sqlite3_stmt *seen = db.prep("INSERT INTO seen VALUES (?)");
-
-  int scanned = 0, changed = 0, touched = 0;
-  for (auto &ent : recursive_directory_iterator(dir)) {
-    if (!ent.is_regular_file() || ent.path().extension() != ".png") continue;
-    const string rel = relative(ent.path(), dir).string();
-    const int64_t mt = mtime_ns(ent.path());
-    const int64_t sz = ent.file_size();
-    scanned++;
-
-    sqlite3_bind_text(seen, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_step(seen);
-    sqlite3_reset(seen);
-
-    sqlite3_bind_text(state, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
-    bool same_stat = sqlite3_step(state) == SQLITE_ROW &&
-      sqlite3_column_int64(state, 0) == mt && sqlite3_column_int64(state, 1) == sz;
-    sqlite3_reset(state);
-    if (same_stat) continue;
-
-    // rewritten on disk, but possibly with identical pixels (region saved without changes)
-    const string data = readFile(ent.path());
-    sqlite3_bind_text(latest, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
-    bool same_data = false;
-    if (sqlite3_step(latest) == SQLITE_ROW && sqlite3_column_type(latest, 0) == SQLITE_BLOB) {
-      same_data = sqlite3_column_bytes(latest, 0) == (int)data.size() &&
-        memcmp(sqlite3_column_blob(latest, 0), data.data(), data.size()) == 0;
-    }
-    sqlite3_reset(latest);
-
-    if (same_data) {
-      touched++;
-    } else {
-      sqlite3_bind_text(ins, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
-      sqlite3_bind_int64(ins, 2, sid);
-      sqlite3_bind_blob(ins, 3, data.data(), data.size(), SQLITE_TRANSIENT);
-      if (sqlite3_step(ins) != SQLITE_DONE) db.die("insert tile");
-      sqlite3_reset(ins);
-      changed++;
-    }
-    sqlite3_bind_text(upd, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(upd, 2, mt);
-    sqlite3_bind_int64(upd, 3, sz);
-    if (sqlite3_step(upd) != SQLITE_DONE) db.die("update state");
-    sqlite3_reset(upd);
-  }
-
-  // tiles that disappeared from disk get a tombstone
-  sqlite3_stmt *gone = db.prep("SELECT path FROM tile_state WHERE path NOT IN (SELECT path FROM temp.seen)");
-  int removed = 0;
-  while (sqlite3_step(gone) == SQLITE_ROW) {
-    sqlite3_bind_text(ins, 1, (const char*)sqlite3_column_text(gone, 0), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int64(ins, 2, sid);
-    sqlite3_bind_null(ins, 3);
-    if (sqlite3_step(ins) != SQLITE_DONE) db.die("insert tombstone");
-    sqlite3_reset(ins);
-    removed++;
-  }
-  sqlite3_finalize(gone);
-  db.exec("DELETE FROM tile_state WHERE path NOT IN (SELECT path FROM temp.seen)");
-
-  for (auto s : {state, latest, ins, upd, seen}) sqlite3_finalize(s);
-  db.exec("DROP TABLE temp.seen");
-  db.exec("COMMIT");
-  printf("snapshot %ld: %d tiles scanned, %d changed, %d rewritten but identical, %d removed\n",
-         sid, scanned, changed, touched, removed);
-}
 
 static void list(Db &db) {
   sqlite3_stmt *s = db.prep(
@@ -186,44 +50,152 @@ static void export_snapshot(Db &db, int64_t sid, const path &out) {
   printf("exported %d tiles of snapshot %ld to %s\n", n, sid, out.c_str());
 }
 
+
+static string json_escape(const string &in) {
+  string out;
+  for (char c : in) {
+    if (c == '"' || c == '\\') { out += '\\'; out += c; }
+    else if ((unsigned char)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+    else out += c;
+  }
+  return out;
+}
+
+static const char *content_type(const path &p) {
+  string e = p.extension().string();
+  if (e == ".html") return "text/html; charset=utf-8";
+  if (e == ".js") return "text/javascript";
+  if (e == ".wasm") return "application/wasm";
+  if (e == ".css") return "text/css";
+  if (e == ".png") return "image/png";
+  return "application/octet-stream";
+}
+
+// serves the tile history to the web viewer:
+//   /api/snapshots        [{"id", "taken_at", "note"}], oldest first
+//   /api/dims             ["", "DIM-1", ...], "" being the overworld (its heights live under height/)
+//   /tile/<sid>/<path>    the newest version of <path> at or before snapshot <sid>
+//   /textures/<file>      atlas.png and blocks.json from a texture-dump directory, for the textured view
+//   anything else         a file from `webroot`
+static void serve(Db &db, int port, const path &webroot, const path &textures) {
+  MetricsServer http("", port);
+  sqlite3_stmt *snaps = db.prep("SELECT id, taken_at, coalesce(note, '') FROM snapshots ORDER BY id");
+  sqlite3_stmt *dims = db.prep(
+    "SELECT DISTINCT CASE WHEN path GLOB '[0-9]*' OR path GLOB 'height/*' OR path GLOB 'icons/*' OR path GLOB 'shapes/*' OR path GLOB 'caves/*' THEN '' ELSE substr(path, 1, instr(path, '/') - 1) END "
+    "FROM tile_versions ORDER BY 1");
+  sqlite3_stmt *tile = db.prep(
+    "SELECT png FROM tile_versions WHERE path = ? AND snapshot_id <= ? ORDER BY snapshot_id DESC LIMIT 1");
+
+  http.addHandler([&](const string &target, MetricsServer::Response &r) {
+    if (target == "/api/snapshots") {
+      r.body = "[";
+      while (sqlite3_step(snaps) == SQLITE_ROW) {
+        if (r.body.size() > 1) r.body += ",";
+        r.body += "{\"id\":" + to_string(sqlite3_column_int64(snaps, 0)) +
+          ",\"taken_at\":" + to_string(sqlite3_column_int64(snaps, 1)) +
+          ",\"note\":\"" + json_escape((const char*)sqlite3_column_text(snaps, 2)) + "\"}";
+      }
+      sqlite3_reset(snaps);
+      r.body += "]";
+      r.status = "200 OK"; r.ctype = "application/json";
+      return true;
+    }
+    if (target == "/api/dims") {
+      r.body = "[";
+      while (sqlite3_step(dims) == SQLITE_ROW) {
+        if (r.body.size() > 1) r.body += ",";
+        r.body += "\"" + json_escape((const char*)sqlite3_column_text(dims, 0)) + "\"";
+      }
+      sqlite3_reset(dims);
+      r.body += "]";
+      r.status = "200 OK"; r.ctype = "application/json";
+      return true;
+    }
+    if (target.starts_with("/tile/")) {
+      size_t slash = target.find('/', 6);
+      if (slash == string::npos) return false;
+      int64_t sid = atoll(target.substr(6, slash - 6).c_str());
+      string rel = target.substr(slash + 1);
+      sqlite3_bind_text(tile, 1, rel.c_str(), -1, SQLITE_TRANSIENT);
+      sqlite3_bind_int64(tile, 2, sid);
+      if (sqlite3_step(tile) == SQLITE_ROW && sqlite3_column_type(tile, 0) == SQLITE_BLOB) {
+        r.body.assign((const char*)sqlite3_column_blob(tile, 0), sqlite3_column_bytes(tile, 0));
+        r.status = "200 OK"; r.ctype = "image/png";
+      } else {
+        r.status = "404 Not Found"; r.ctype = "text/plain"; r.body = "no such tile\n";
+      }
+      sqlite3_reset(tile);
+      // a tile at an existing snapshot never changes, missing ones may appear in a later ingest
+      r.headers = r.status[0] == '2' ? "Cache-Control: public, max-age=86400\r\n" : "Cache-Control: max-age=60\r\n";
+      return true;
+    }
+    if (target.find("..") != string::npos) return false;
+    path file;
+    if (target == "/textures/atlas.png" || target == "/textures/blocks.json") {
+      if (textures.empty()) return false;
+      file = textures / target.substr(strlen("/textures/"));
+    } else {
+      if (webroot.empty()) return false;
+      file = webroot / (target == "/" ? "index.html" : target.substr(1));
+    }
+    if (!is_regular_file(file)) return false;
+    r.body = readFile(file);
+    r.status = "200 OK"; r.ctype = content_type(file);
+    return true;
+  });
+  http.serve();
+}
+
 static void usage(const char *argv0) {
   printf("usage:\n"
-         "  %1$s -d <db> ingest -o <render dir> [-n note]   snapshot changed tiles\n"
+         "  %1$s -d <db> ingest -o <render dir> [-n note] [-t unix time]   snapshot changed tiles\n"
          "  %1$s -d <db> list                               list snapshots\n"
-         "  %1$s -d <db> export -s <id> -o <dir>            write the map as of a snapshot\n", argv0);
+         "  %1$s -d <db> export -s <id> -o <dir>            write the map as of a snapshot\n"
+         "  %1$s -d <db> serve -l <port> [-w <web dir>] [-x <texture-dump dir>]   serve tiles and the viewer over http\n", argv0);
 }
 
 int main(int argc, char **argv) {
   const char *dbpath = nullptr, *dir = nullptr, *note = nullptr;
-  int64_t sid = -1;
+  int64_t sid = -1, taken_at = time(nullptr);
+  int port = 0;
+  const char *webroot = "", *textures = "";
   int opt;
   // allow options before and after the command
-  while ((opt = getopt(argc, argv, "+d:o:n:s:h")) != -1 || optind < argc) {
+  while ((opt = getopt(argc, argv, "+d:o:n:s:t:l:w:x:h")) != -1 || optind < argc) {
     if (opt == -1) break;
     switch (opt) {
     case 'd': dbpath = optarg; break;
     case 'o': dir = optarg; break;
     case 'n': note = optarg; break;
     case 's': sid = atoll(optarg); break;
+    case 't': taken_at = atoll(optarg); break;
+    case 'l': port = atoi(optarg); break;
+    case 'w': webroot = optarg; break;
+    case 'x': textures = optarg; break;
     default: usage(argv[0]); return 1;
     }
   }
   if (!dbpath || optind >= argc) { usage(argv[0]); return 1; }
   string cmd = argv[optind];
   optind++;
-  while ((opt = getopt(argc, argv, "d:o:n:s:")) != -1) {
+  while ((opt = getopt(argc, argv, "d:o:n:s:t:l:w:x:")) != -1) {
     switch (opt) {
     case 'o': dir = optarg; break;
     case 'n': note = optarg; break;
     case 's': sid = atoll(optarg); break;
+    case 't': taken_at = atoll(optarg); break;
+    case 'l': port = atoi(optarg); break;
+    case 'w': webroot = optarg; break;
+    case 'x': textures = optarg; break;
     default: usage(argv[0]); return 1;
     }
   }
 
   Db db(dbpath);
-  if (cmd == "ingest" && dir) ingest(db, dir, note);
+  if (cmd == "ingest" && dir) ingest(db, dir, note, taken_at);
   else if (cmd == "list") list(db);
   else if (cmd == "export" && dir && sid >= 0) export_snapshot(db, sid, dir);
+  else if (cmd == "serve" && port > 0) serve(db, port, webroot, textures);
   else { usage(argv[0]); return 1; }
   return 0;
 }

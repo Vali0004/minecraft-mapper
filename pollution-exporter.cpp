@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <string>
+#include <thread>
 #include <unistd.h>
 
 #include "utils.h"
@@ -302,7 +303,8 @@ void collect_all(const path savepath, string &out) {
 static void usage(const char *argv0) {
   printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>]\n"
          "  -l  serve prometheus metrics over http (default :9150)\n"
-         "  -o  instead write a node_exporter textfile every 10s\n", argv0);
+         "  -o  write a node_exporter textfile every 10s. with -o alone there is no http server,\n"
+         "      with both -o and -l it does both\n", argv0);
 }
 
 int main(int argc, char **argv) {
@@ -310,6 +312,7 @@ int main(int argc, char **argv) {
   char *prom_out = NULL;
   string listen_addr;
   int port = 9150;
+  bool listen = false;
   int opt;
   while ((opt = getopt(argc, argv, "p:o:l:h")) != -1) {
     switch (opt) {
@@ -320,6 +323,7 @@ int main(int argc, char **argv) {
       prom_out = optarg;
       break;
     case 'l': {
+      listen = true;
       string l = optarg;
       size_t colon = l.rfind(':');
       if (colon == string::npos) {
@@ -343,7 +347,8 @@ int main(int argc, char **argv) {
     return 1;
   }
   const path save{savepath};
-  if (prom_out) {
+  // the textfile, like the original exporter wrote for node_exporter's textfile collector
+  auto write_textfile = [save, prom_out]() {
     const string tmp = string(prom_out) + ".tmp";
     while (true) {
       string out;
@@ -359,7 +364,13 @@ int main(int argc, char **argv) {
       }
       sleep(10);
     }
+  };
+  if (prom_out && !listen) {
+    write_textfile();
+    return 0;
   }
+  // collecting only reads the save, the file and http scrapes can run side by side
+  if (prom_out) thread(write_textfile).detach();
   MetricsServer server(listen_addr, port);
   server.addCollector([save](string &out) { collect_all(save, out); });
   server.serve();

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GTNH Map</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; color: #fff; font: 13px monospace; }
+  #map { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #bar, #cursor, #hint { position: fixed; background: #000; border: 1px solid #fff; padding: 4px 8px; }
+  #bar { top: 8px; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #cursor { right: 8px; bottom: 8px; }
+  #hint { left: 8px; bottom: 8px; display: none; }
+  select, button { background: #000; color: #fff; border: 1px solid #fff; font: inherit; padding: 2px 6px; }
+  button[aria-pressed="true"] { background: #fff; color: #000; }
+  button:disabled { opacity: 0.4; }
+  input[type=range] { accent-color: #fff; }
+  #time { flex: 1; display: flex; gap: 8px; align-items: center; min-width: 200px; }
+  #snapshot { flex: 1; }
+  [hidden] { display: none !important; }
+  #error { position: fixed; inset: 0; display: none; place-items: center; padding: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+<div id="bar">
+  <label>Dimension <select id="dim"></select></label>
+  <button id="mode" type="button" aria-pressed="false">3D</button>
+  <label id="xray-label" hidden>X-ray <input id="xray" type="range" min="0" max="100" value="0"></label>
+  <label id="layer-label">Layer <select id="layer">
+    <option value="0">Surface</option>
+    <option value="64">Caves below y 64</option>
+    <option value="56">Caves below y 56</option>
+    <option value="48">Caves below y 48</option>
+    <option value="40">Caves below y 40</option>
+    <option value="32">Caves below y 32</option>
+    <option value="24">Caves below y 24</option>
+    <option value="16">Caves below y 16</option>
+  </select></label>
+  <div id="time">
+    <input id="snapshot" type="range" min="0" max="0" value="0" aria-label="Snapshot">
+    <span id="when">loading...</span>
+  </div>
+</div>
+<div id="cursor">x 0, z 0</div>
+<div id="hint">Drag to move, right drag or shift drag to turn, scroll to zoom</div>
+<div id="error"></div>
+<script>
+  const DIM_NAMES = { "": "Overworld", "DIM-1": "Nether", "DIM1": "The End" };
+  const $ = id => document.getElementById(id);
+  let snapshots = [];
+
+  function fail(msg) {
+    $("error").textContent = msg;
+    $("error").style.display = "grid";
+  }
+
+  function resize() {
+    const c = $("map"), dpr = window.devicePixelRatio || 1;
+    c.width = Math.round(innerWidth * dpr);
+    c.height = Math.round(innerHeight * dpr);
+    Module._viewer_resize(c.width, c.height);
+  }
+
+  function showSnapshot(i) {
+    const s = snapshots[i];
+    if (!s) return;
+    $("when").textContent = new Date(s.taken_at * 1000).toLocaleString();
+    Module._viewer_set_snapshot(s.id);
+    try { localStorage.setItem("snapshot", s.id); } catch (e) {}
+  }
+
+  function setMode(on) {
+    Module._viewer_set_3d(on ? 1 : 0);
+    $("mode").setAttribute("aria-pressed", on);
+    $("hint").style.display = on ? "block" : "none";
+    // 3d shows every layer at once, the picker is for 2d
+    $("layer-label").hidden = on;
+    $("xray-label").hidden = !on;
+    try { localStorage.setItem("mode3d", on ? "1" : ""); } catch (e) {}
+  }
+
+  // the cave layers only exist when the renderer runs with -c, a missing one just shows nothing
+  function setLayer(y) {
+    Module._viewer_set_layer(y);
+    $("layer").value = String(y);
+  }
+
+  function setDim(d) {
+    Module.ccall("viewer_set_dim", null, ["string"], [d]);
+    try { localStorage.setItem("dim", d); } catch (e) {}
+  }
+
+  var Module = {
+    canvas: $("map"),
+    onFail: fail,
+    onCursor: (x, z) => { $("cursor").textContent = `x ${x}, z ${z}`; },
+    // called from the viewer's main(), once webgl is set up
+    onViewerReady: async () => {
+      resize();
+      addEventListener("resize", resize);
+      // right drag turns the camera in 3d
+      $("map").addEventListener("contextmenu", e => e.preventDefault());
+      if (!Module._viewer_can_3d()) {
+        $("mode").disabled = true;
+        $("mode").title = "This browser cannot read textures in vertex shaders";
+      }
+      $("mode").onclick = () => setMode($("mode").getAttribute("aria-pressed") !== "true");
+      try {
+        const [snaps, dims] = await Promise.all([
+          fetch("api/snapshots").then(r => r.json()),
+          fetch("api/dims").then(r => r.json()),
+        ]);
+        snapshots = snaps;
+        if (!snapshots.length) return fail("No snapshots yet. Tiles appear after the first backup is rendered.");
+
+        let saved = {};
+        try { saved = { dim: localStorage.getItem("dim"), snap: localStorage.getItem("snapshot") }; } catch (e) {}
+
+        for (const d of dims) $("dim").add(new Option(DIM_NAMES[d] || d, d));
+        const hd = new URLSearchParams(location.hash.slice(1)).get("dim");
+        const dim = dims.includes(hd) ? hd : dims.includes(saved.dim) ? saved.dim : (dims.includes("") ? "" : dims[0]);
+        $("dim").value = dim;
+        setDim(dim);
+        $("dim").onchange = e => setDim(e.target.value);
+        $("layer").onchange = e => setLayer(+e.target.value);
+        $("xray").oninput = e => Module._viewer_set_xray(1 - e.target.value / 100);
+
+        const slider = $("snapshot");
+        slider.max = snapshots.length - 1;
+        const si = snapshots.findIndex(s => String(s.id) === saved.snap);
+        slider.value = si >= 0 ? si : snapshots.length - 1;
+        slider.oninput = () => showSnapshot(+slider.value);
+        showSnapshot(+slider.value);
+        let saved3d = false;
+        try { saved3d = !!localStorage.getItem("mode3d"); } catch (e) {}
+        // a link can pin the view: #x=-250&z=580&3d&yaw=30&pitch=40&dist=60
+        const h = new URLSearchParams(location.hash.slice(1));
+        if (h.has("3d")) saved3d = true;
+        if (h.has("2d")) saved3d = false;
+        if (h.has("scale")) Module._viewer_set_scale(+h.get("scale"));
+        if (h.has("caves")) setLayer(+h.get("caves"));
+        if (h.has("xray")) { $("xray").value = h.get("xray"); Module._viewer_set_xray(1 - h.get("xray") / 100); }
+        if (saved3d && Module._viewer_can_3d()) setMode(true);
+        if (h.has("x") && h.has("z")) Module._viewer_goto(+h.get("x"), +h.get("z"));
+        if (h.has("yaw") || h.has("pitch") || h.has("dist"))
+          Module._viewer_set_camera(+(h.get("yaw") || 0), +(h.get("pitch") || 45), +(h.get("dist") || 100));
+      } catch (e) {
+        fail("Could not reach tile-history: " + e);
+      }
+    },
+  };
+</script>
+<script src="viewer.js"></script>
+</body>
+</html>

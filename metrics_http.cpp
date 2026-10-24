@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <thread>
 #include <unistd.h>
 
 using namespace std;
@@ -35,7 +36,7 @@ MetricsServer::MetricsServer(const string &bind_addr, int port) {
   }
   if (bind(sfd, (sockaddr*)&addr, sizeof(addr)) < 0) { perror("bind"); exit(1); }
   if (listen(sfd, 16) < 0) { perror("listen"); exit(1); }
-  printf("serving metrics on [%s]:%d/metrics\n", bind_addr.empty() ? "::" : bind_addr.c_str(), port);
+  printf("serving http on [%s]:%d\n", bind_addr.empty() ? "::" : bind_addr.c_str(), port);
 }
 
 MetricsServer::~MetricsServer() {
@@ -44,6 +45,10 @@ MetricsServer::~MetricsServer() {
 
 void MetricsServer::addCollector(Collector c) {
   collectors.push_back(std::move(c));
+}
+
+void MetricsServer::addHandler(Handler h) {
+  handlers.push_back(std::move(h));
 }
 
 static void writeAll(int fd, const string &s) {
@@ -76,8 +81,19 @@ void MetricsServer::handleClient(int fd) {
   size_t q = target.find('?');
   if (q != string::npos) target.resize(q);
 
-  string status, ctype, body;
-  if (method != "GET" && method != "HEAD") {
+  string status, ctype, body, extra;
+  Response r;
+  bool handled = false;
+  // slow clients only hold their own thread, the handlers themselves share state
+  unique_lock<mutex> l(lock);
+  if (method == "GET" || method == "HEAD") {
+    for (auto &h : handlers) {
+      if ((handled = h(target, r))) break;
+    }
+  }
+  if (handled) {
+    status = r.status; ctype = r.ctype; body = std::move(r.body); extra = r.headers;
+  } else if (method != "GET" && method != "HEAD") {
     status = "405 Method Not Allowed"; ctype = "text/plain"; body = "method not allowed\n";
   } else if (target == "/metrics") {
     status = "200 OK"; ctype = "text/plain; version=0.0.4; charset=utf-8";
@@ -89,8 +105,10 @@ void MetricsServer::handleClient(int fd) {
     status = "404 Not Found"; ctype = "text/plain"; body = "not found\n";
   }
 
+  l.unlock();
+
   string resp = "HTTP/1.1 " + status + "\r\nContent-Type: " + ctype +
-    "\r\nContent-Length: " + to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
+    "\r\nContent-Length: " + to_string(body.size()) + "\r\n" + extra + "Connection: close\r\n\r\n";
   if (method != "HEAD") resp += body;
   writeAll(fd, resp);
 }
@@ -99,7 +117,9 @@ void MetricsServer::serve() {
   while (true) {
     int fd = accept4(sfd, NULL, NULL, SOCK_CLOEXEC);
     if (fd < 0) { perror("accept"); continue; }
-    handleClient(fd);
-    close(fd);
+    thread([this, fd] {
+      handleClient(fd);
+      close(fd);
+    }).detach();
   }
 }

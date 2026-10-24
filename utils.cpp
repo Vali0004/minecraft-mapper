@@ -35,7 +35,7 @@ int load_png(const filesystem::path &path, Image &img) {
 }
 
 void write_png(const filesystem::path &path, const Image &img) {
-  if (!exists(path.parent_path())) create_directory(path.parent_path());
+  create_directories(path.parent_path());
   png_image image;
   memset(&image, 0, sizeof(image));
   image.version = PNG_IMAGE_VERSION;

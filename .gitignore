@@ -5,3 +5,6 @@ biome-thingy
 chunk-save-logger
 pollution-exporter
 tile-history
+web/
+texture-dump/build/
+texture-dump/texture-dump.jar

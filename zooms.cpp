@@ -87,7 +87,6 @@ int shrink_tile(filesystem::path path, int xin, int yin, int tilex, int tiley, I
   char buffer[64];
   snprintf(buffer, 60, "%d/%d,%d.png", zoom, xin + tilex, yin + tiley);
   string input = path / buffer;
-  cout << input << endl;
 
   int ret = load_png(input, input_buffer);
 
@@ -127,9 +126,6 @@ void regen_zooms(const filesystem::path &path, bool verbose) {
   const int maxzoom = 17;
   char buffer[64];
 
-  Image input_buffer;
-  Image output_buffer;
-
   for (int zoom=16; zoom > 5; zoom--) {
     snprintf(buffer, 60, "%d", zoom+1);
     filesystem::directory_iterator iterator{ path / buffer };
@@ -137,23 +133,24 @@ void regen_zooms(const filesystem::path &path, bool verbose) {
     fs::path parentDir = path / to_string(zoom);
     fs::create_directories(parentDir);
 
-    set<pair<int, int>> todo_list;
+    set<pair<int, int>> todo_set;
 
     const int steps = maxzoom - zoom;
     printf("generating %d from %d, steps %d\n", zoom, zoom+1, steps);
     for (auto &ent : iterator) {
       auto &p = ent.path();
-      cout << p << endl;
       auto coord = parse_tile_name(p.stem());
       pair<int,int> parent_coord = { coord.first >> 1, coord.second >> 1 };
-      printf("%d %d added\n", parent_coord.first, parent_coord.second);
-      todo_list.insert(parent_coord);
+      todo_set.insert(parent_coord);
     }
 
-    for (auto &coord : todo_list) {
-      int x = coord.first;
-      int y = coord.second;
-      printf("shrinking into %d %d\n", x, y);
+    // every parent tile only reads its own 4 children, so a level builds in parallel
+    vector<pair<int, int>> todo_list(todo_set.begin(), todo_set.end());
+    parallel_for(todo_list.size(), [&](size_t i) {
+      thread_local Image input_buffer;
+      thread_local Image output_buffer;
+      int x = todo_list[i].first;
+      int y = todo_list[i].second;
       int xin = x << 1;
       int yin = y << 1;
 
@@ -164,13 +161,11 @@ void regen_zooms(const filesystem::path &path, bool verbose) {
       parts += shrink_tile(path, xin, yin, 1, 0, input_buffer, output_buffer, zoom+1);
       parts += shrink_tile(path, xin, yin, 1, 1, input_buffer, output_buffer, zoom+1);
 
-      printf("found %d sub-tiles\n", parts);
-
       if (parts > 0) {
-        snprintf(buffer, 60, "%d/%d,%d.png", zoom, x, y);
-        string outpath = path / buffer;
-        write_png(outpath, output_buffer);
+        char name[64];
+        snprintf(name, 60, "%d/%d,%d.png", zoom, x, y);
+        write_png(path / name, output_buffer);
       }
-    }
+    });
   }
 }
