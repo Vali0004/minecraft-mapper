@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #include <GLES2/gl2.h>
 #include <emscripten.h>
 #include <emscripten/html5.h>

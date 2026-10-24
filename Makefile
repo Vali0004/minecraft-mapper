@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 PREFIX ?= /usr/local
 BINS = biome-thingy chunk-save-logger pollution-exporter tile-history
 

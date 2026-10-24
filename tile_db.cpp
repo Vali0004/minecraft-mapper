@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // see tile_db.h
 //
 // every `ingest` creates a snapshot, but only stores tiles whose contents changed since

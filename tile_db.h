@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #pragma once
 // sqlite store of rendered map tiles, shared by tile-history and biome-thingy's backup mode
 #include <filesystem>

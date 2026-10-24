@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #include "metrics_http.h"
 
 #include <arpa/inet.h>

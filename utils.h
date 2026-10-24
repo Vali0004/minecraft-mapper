@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #pragma once
 
 #include <string>
@@ -12,6 +13,8 @@
 #include "image.h"
 
 extern uint64_t own_age;
+// set in biome-thingy's backup mode, keeps the per region and per tile chatter out of the journal
+extern bool quiet;
 
 void to_file(const std::filesystem::path &path, const void *buffer, int size);
 std::string readFile(const std::filesystem::path &path);

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 { lib, stdenv, zlib, libpng, nlohmann_json, sqlite, libzip, emscripten }:
 
 let
@@ -15,6 +16,7 @@ let
         runHook postInstall
       '';
       meta = {
+        license = lib.licenses.mpl20;
         inherit description;
         mainProgram = pname;
         platforms = lib.platforms.linux;
@@ -68,6 +70,7 @@ in
       runHook postInstall
     '';
     meta = {
+      license = lib.licenses.mpl20;
       description = "WebGL viewer for tile-history, serve with `tile-history serve -w`";
       platforms = lib.platforms.all;
     };

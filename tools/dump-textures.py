@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MPL-2.0
 # starts a prism launcher gtnh instance straight from java, without the launcher, just long enough
 # for texture-dump's mod to write texture-dump/atlas.png and blocks.json, then the game exits
 import json, os, subprocess, sys

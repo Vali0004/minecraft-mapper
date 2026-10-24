@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #include <arpa/inet.h>
 #include <list>
 #include <algorithm>
@@ -167,9 +168,9 @@ void parseAndLoadNBT(string path, const nbt_callbacks *cb) {
     if (bytes < 8192) {
       flags |= Z_FINISH;
     }
-    printf("%ld %d %ld %d\n", bytes, strm.avail_out, strm.total_out, strm.avail_in);
+    if (!quiet) printf("%ld %d %ld %d\n", bytes, strm.avail_out, strm.total_out, strm.avail_in);
     ret = inflate(&strm, flags);
-    printf("%ld %d %ld %d %d\n", bytes, strm.avail_out, strm.total_out, strm.avail_in, ret);
+    if (!quiet) printf("%ld %d %ld %d %d\n", bytes, strm.avail_out, strm.total_out, strm.avail_in, ret);
     if (ret < 0) {
       printf("%s\n", strm.msg);
       break;
@@ -252,7 +253,7 @@ void parseLevel(string root, level_state &state_out) {
   for (const auto &n : s.items) {
     uint32_t itemid = n.first;
     string item_name = n.second;
-    printf("%d %s\n", itemid, item_name.c_str());
+    if (!quiet) printf("%d %s\n", itemid, item_name.c_str());
   }
   state_out.blocks = s.blocks;
   state_out.items = s.items;
@@ -590,11 +591,11 @@ void parse_region(const filesystem::path &region_path, int dim, signed int x, si
 
   bool do_update = need_update(region_path, png_out);
 
-  if (do_update) puts("updating");
-  else {
-    puts("region older, skipping");
+  if (!do_update) {
+    if (!quiet) puts("region older, skipping");
     return;
   }
+  if (!quiet) puts("updating");
 
   Image region_image;
   Image height_image;
@@ -849,7 +850,7 @@ static void render_world(const filesystem::path &savepath, const filesystem::pat
     dir /= "region";
     filesystem::path out = outpath;
     if (dim != 0) out /= dname;
-    cout << dir << " " << out << endl;
+    if (!quiet) cout << dir << " " << out << endl;
     if (!exists(dir)) return;
     if (!exists(out)) create_directories(out);
     region_loop(dir, dim, lstate, out, findMe, foundBlocks);
@@ -917,12 +918,17 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // under systemd stdout is a pipe, flush every line so the journal keeps up. this has to come
+  // before anything is printed
+  if (backupdir) setvbuf(stdout, nullptr, _IOLBF, 0);
+
   lstate.color_table = json::parse(readFile(datadir / "colors.json"));
   lstate.transparent_blocks = json::parse(readFile(datadir / "transparent_blocks.json"));
   // optional, a texture-dump output directory, adds the icons/ tiles for the textured view
   if (texturedir) load_textures(texturedir, lstate);
 
   if (backupdir) {
+    quiet = true;
     // corrupt chunks get dumped here
     filesystem::create_directories("chunks");
     backup_loop(backupdir, dbpath, [&lstate](const filesystem::path &save, const filesystem::path &out) {

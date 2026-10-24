@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #include <assert.h>
 #include <png.h>
 #include <stdint.h>
@@ -10,6 +11,7 @@
 using namespace std;
 
 uint64_t own_age;
+bool quiet = false;
 
 int load_png(const filesystem::path &path, Image &img) {
   png_image image;
@@ -43,9 +45,9 @@ void write_png(const filesystem::path &path, const Image &img) {
   image.width = 512;
   image.height = 512;
 
-  printf("output %s\n", path.c_str());
+  if (!quiet) printf("output %s\n", path.c_str());
   int ret = png_image_write_to_file(&image, path.c_str(), false, img.bitmap, 512*4, NULL);
-  printf("ret %d\n", ret);
+  if (!quiet) printf("ret %d\n", ret);
 }
 
 void to_file(const filesystem::path &path, const void *buffer, int size) {

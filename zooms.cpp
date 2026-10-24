@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #include "zooms.h"
 #include "utils.h"
 
@@ -136,7 +137,7 @@ void regen_zooms(const filesystem::path &path, bool verbose) {
     set<pair<int, int>> todo_set;
 
     const int steps = maxzoom - zoom;
-    printf("generating %d from %d, steps %d\n", zoom, zoom+1, steps);
+    if (!quiet) printf("generating %d from %d, steps %d\n", zoom, zoom+1, steps);
     for (auto &ent : iterator) {
       auto &p = ent.path();
       auto coord = parse_tile_name(p.stem());

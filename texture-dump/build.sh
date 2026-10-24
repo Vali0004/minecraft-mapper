@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # builds texture-dump.jar against the forge and lwjgl jars of a prism launcher install
 set -euo pipefail
 cd "$(dirname "$0")"

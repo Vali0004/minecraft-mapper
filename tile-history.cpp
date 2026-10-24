@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // keeps a history of biome-thingy's rendered tiles in sqlite, see tile_db.cpp
 #include <chrono>
 #include <filesystem>

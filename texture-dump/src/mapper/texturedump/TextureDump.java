@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 package mapper.texturedump;
 
 import cpw.mods.fml.common.FMLCommonHandler;
