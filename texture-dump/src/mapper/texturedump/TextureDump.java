@@ -139,10 +139,72 @@ public class TextureDump {
     }
     System.out.println("[texturedump] wrote " + blocks + " blocks, " + icons.size() + " icons to " + dir.getAbsolutePath() +
                        " in " + (System.currentTimeMillis() - start) + "ms");
+    dumpItems(dir);
+  }
+
+  // texture-dump/items.json: registry name -> damage -> display name, for every variant the creative menu
+  // lists. GregTech keeps whole material sets in one item, the name only exists in game ("Iron Ingot")
+  void dumpItems(File dir) throws Exception {
+    Object registry = callStatic(Class.forName("cpw.mods.fml.common.registry.GameData"), "getItemRegistry", "getItemRegistry");
+    Method nameOf = method(registry.getClass(), "func_148750_c", "getNameForObject", Object.class);
+    Class<?> stackClass = Class.forName("net.minecraft.item.ItemStack");
+    StringBuilder json = new StringBuilder("{\n");
+    int items = 0, names = 0;
+    for (Object item : (Iterable<?>) call(registry, "typeSafeIterable", "typeSafeIterable")) {
+      String name = String.valueOf(nameOf.invoke(registry, item));
+      List<Object> stacks = new ArrayList<>();
+      try {
+        Object tab = call(item, "func_77640_w", "getCreativeTab");
+        if (tab != null) {
+          Method sub = null;
+          for (Class<?> k = item.getClass(); k != null && sub == null; k = k.getSuperclass())
+            for (Method m : k.getDeclaredMethods())
+              if ((m.getName().equals("func_150895_a") || m.getName().equals("getSubItems")) && m.getParameterTypes().length == 3) sub = m;
+          if (sub != null) {
+            sub.setAccessible(true);
+            sub.invoke(item, item, tab, stacks);
+          }
+        }
+      } catch (Throwable t) {}
+      // items outside the creative menu still get their plain damage 0 name
+      if (stacks.isEmpty()) {
+        try { stacks.add(stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class).newInstance(item, 1, 0)); } catch (Throwable t) {}
+      }
+      Map<Integer, String> byDamage = new java.util.TreeMap<>();
+      for (Object stack : stacks) {
+        try {
+          int damage = (Integer) call(stack, "func_77960_j", "getItemDamage");
+          String display = (String) call(stack, "func_82833_r", "getDisplayName");
+          if (display != null && !byDamage.containsKey(damage)) byDamage.put(damage, display);
+        } catch (Throwable t) {}
+      }
+      if (byDamage.isEmpty()) continue;
+      if (items++ > 0) json.append(",\n");
+      json.append("  \"").append(escape(name)).append("\":{");
+      boolean first = true;
+      for (Map.Entry<Integer, String> e : byDamage.entrySet()) {
+        if (!first) json.append(",");
+        first = false;
+        json.append("\"").append(e.getKey()).append("\":\"").append(escape(e.getValue())).append("\"");
+        names++;
+      }
+      json.append("}");
+    }
+    json.append("\n}\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "items.json")), StandardCharsets.UTF_8)) {
+      wr.write(json.toString());
+    }
+    System.out.println("[texturedump] wrote " + names + " names of " + items + " items");
   }
 
   static String escape(String s) {
-    return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    StringBuilder b = new StringBuilder();
+    for (char c : s.toCharArray()) {
+      if (c == '\\' || c == '"') b.append('\\').append(c);
+      else if (c < 0x20) b.append(String.format("\\u%04x", (int) c));
+      else b.append(c);
+    }
+    return b.toString();
   }
 
   // reflection, srg name first, then the deobfuscated one for dev environments

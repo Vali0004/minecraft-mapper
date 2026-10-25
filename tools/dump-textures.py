@@ -81,7 +81,18 @@ try:
         if kv.startswith(b"LD_LIBRARY_PATH="):
             env["LD_LIBRARY_PATH"] = ":".join(p for p in [env.get("LD_LIBRARY_PATH"), kv.split(b"=", 1)[1].decode()] if p)
 except (subprocess.CalledProcessError, OSError):
-    print("no running prism to borrow LD_LIBRARY_PATH from, opengl may not load", file=sys.stderr)
+    # no prism running: on nixos build the same list from nixpkgs
+    if os.path.exists("/run/opengl-driver/lib"):
+        pkgs = ["glfw3-minecraft", "libglvnd", "xorg.libX11", "xorg.libXcursor", "xorg.libXext", "xorg.libXrandr",
+                "xorg.libXxf86vm", "openal", "libpulseaudio", "alsa-lib", "stdenv.cc.cc.lib"]
+        try:
+            out = subprocess.check_output(["nix", "build", "--no-link", "--print-out-paths"] + [f"nixpkgs#{p}" for p in pkgs], text=True)
+            paths = ["/run/opengl-driver/lib"] + [d + "/lib" for d in out.split()]
+            env["LD_LIBRARY_PATH"] = ":".join(p for p in [env.get("LD_LIBRARY_PATH")] + paths if p)
+        except (subprocess.CalledProcessError, OSError):
+            print("no running prism to borrow LD_LIBRARY_PATH from, opengl may not load", file=sys.stderr)
+    else:
+        print("no running prism to borrow LD_LIBRARY_PATH from, opengl may not load", file=sys.stderr)
 
 print(f"{len(classpath)} jars, main class {main_class}", file=sys.stderr)
 sys.exit(subprocess.call(cmd, cwd=game, env=env))

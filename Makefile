@@ -29,7 +29,7 @@ biome-thingy: biome-thingy.o nbt.o utils.o chunk.o zooms.o image.o event_loop.o 
 chunk-save-logger: chunk-save-logger.o inotify.o region.o
 	$(CXX) -o $@ $^ -Wall -g
 
-pollution-exporter: pollution-exporter.o utils.o metrics_http.o nbt_tree.o
+pollution-exporter: pollution-exporter.o utils.o metrics_http.o nbt_tree.o nbt.o
 	$(CXX) -o $@ $^ -Wall -g -lz -lpng -pthread
 
 tile-history: tile-history.o utils.o tile_db.o metrics_http.o
@@ -52,7 +52,7 @@ region.o: region.cpp region.h
 utils.o: utils.cpp utils.h image.h
 zooms.o: zooms.cpp zooms.h utils.h image.h
 metrics_http.o: metrics_http.cpp metrics_http.h
-pollution-exporter.o: pollution-exporter.cpp utils.h metrics_http.h nbt_tree.h
+pollution-exporter.o: pollution-exporter.cpp utils.h metrics_http.h nbt_tree.h nbt.h
 nbt_tree.o: nbt_tree.cpp nbt_tree.h utils.h
 tile-history.o: tile-history.cpp utils.h tile_db.h metrics_http.h
 tile_db.o: tile_db.cpp tile_db.h utils.h

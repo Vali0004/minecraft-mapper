@@ -10,12 +10,15 @@
 
 #include "utils.h"
 #include "metrics_http.h"
+#include "nbt.h"
 #include "nbt_tree.h"
 
 #include <chrono>
 #include <cstdarg>
 #include <map>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <sys/stat.h>
 
 using namespace std;
 using namespace filesystem;
@@ -292,17 +295,187 @@ void collect_players(const path savepath, string &out) {
   out += sum_lines;
 }
 
+// containers
+//
+// item stacks in every tile entity inventory: chests, barrels, furnaces, machine slots ("Items": id, Damage,
+// Count) and Storage Drawers ("Slots": Item, Meta, Count). summed per dimension and item, a region file is
+// only parsed again when it changed on disk
+
+// texture-dump's items.json: registry name -> damage -> display name. without it items are named "mod:item:damage"
+static map<string, map<int, string>> item_names;
+
+struct ItemKey {
+  int id, damage;
+  bool operator<(const ItemKey &o) const { return id != o.id ? id < o.id : damage < o.damage; }
+};
+
+struct RegionContainers {
+  int64_t mtime = 0, size = -1;
+  map<ItemKey, int64_t> items;
+  map<string, int64_t> tiles;  // tile entity id -> how many held items
+};
+
+static mutex container_lock;
+static map<string, RegionContainers> container_cache;
+
+struct StackParse {
+  int id = -1, damage = 0;
+  int64_t count = 0;
+};
+
+struct TileParse {
+  string id;
+  map<int, StackParse> stacks;  // by "Items/<i>" or "Slots/<i>", slots offset to keep them apart
+};
+
+struct ChunkParse {
+  map<int, TileParse> tiles;
+};
+
+// "/Level/TileEntities/<n>/Items/<i>/<field>" or ".../Slots/<i>/<field>", the stack and its field
+static StackParse *stack_field(ChunkParse *c, const string &key, const char *&field) {
+  static const char prefix[] = "/Level/TileEntities/";
+  if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return nullptr;
+  char *end;
+  int te = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
+  int offset;
+  if (!strncmp(end, "/Items/", 7)) { end += 7; offset = 0; }
+  else if (!strncmp(end, "/Slots/", 7)) { end += 7; offset = 1 << 20; }
+  else return nullptr;
+  int slot = strtol(end, &end, 10);
+  if (*end != '/') return nullptr;
+  field = end + 1;
+  return &c->tiles[te].stacks[offset + slot];
+}
+
+static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) {
+  const char *field;
+  StackParse *st = stack_field((ChunkParse *)cb->state, key, field);
+  if (!st) return;
+  if (!strcmp(field, "id") || !strcmp(field, "Item")) st->id = v;
+  else if (!strcmp(field, "Damage") || !strcmp(field, "Meta")) st->damage = v;
+  else if (!strcmp(field, "Count")) st->count = v;
+}
+
+static void tag1_stack(const nbt_callbacks *cb, const string key, uint8_t v) { stack_number(cb, key, (int8_t)v); }
+static void tag2_stack(const nbt_callbacks *cb, const string key, uint16_t v) { stack_number(cb, key, (int16_t)v); }
+static void tag3_stack(const nbt_callbacks *cb, const string key, int32_t v) { stack_number(cb, key, v); }
+static void tag8_tile(const nbt_callbacks *cb, const string key, const string v) {
+  static const char prefix[] = "/Level/TileEntities/";
+  if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return;
+  char *end;
+  int te = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
+  if (!strcmp(end, "/id")) ((ChunkParse *)cb->state)->tiles[te].id = v;
+}
+
+static void scan_region(const path &p, RegionContainers &r) {
+  string data = readFile(p);
+  if (data.size() < 8192) return;
+  const uint8_t *d = (const uint8_t *)data.data();
+  vector<uint8_t> buf(4 << 20);
+  for (int i = 0; i < 1024; i++) {
+    uint32_t loc = ntohl(*(const uint32_t *)(d + i * 4));
+    size_t off = (size_t)(loc >> 8) * 4096;
+    if (!off || off + 5 > data.size()) continue;
+    uint32_t len = ntohl(*(const uint32_t *)(d + off));
+    if (len < 2 || off + 4 + len > data.size() || d[off + 4] != 2) continue;  // 2 = zlib
+    int got;
+    while ((got = decompress(d + off + 5, len - 1, buf.data(), buf.size())) < 0 && buf.size() < (64u << 20)) buf.resize(buf.size() * 2);
+    if (got <= 0) continue;
+
+    ChunkParse chunk;
+    nbt_callbacks cb = {};
+    cb.state = &chunk;
+    cb.tag1 = tag1_stack;
+    cb.tag2 = tag2_stack;
+    cb.tag3 = tag3_stack;
+    cb.tag8 = tag8_tile;
+    parseNBT(buf.data(), got, &cb, false);
+    for (auto &[n, te] : chunk.tiles) {
+      bool any = false;
+      for (auto &[slot, st] : te.stacks) {
+        if (st.id <= 0 || st.count <= 0) continue;
+        r.items[{st.id, st.damage}] += st.count;
+        any = true;
+      }
+      if (any) r.tiles[te.id.empty() ? "unknown" : te.id]++;
+    }
+  }
+}
+
+void collect_containers(const path savepath, string &out) {
+  // numeric ids are per world, level.dat has the registry ("\x02" items, "\x01" blocks)
+  map<int, string> ids;
+  try {
+    NbtTag level = loadGzipNbt(savepath / "level.dat");
+    if (const NbtTag *fml = level.get("FML"))
+      if (const NbtTag *data = fml->get("ItemData"))
+        for (auto &e : data->list) {
+          const NbtTag *k = e.get("K");
+          if (!k || k->s.size() < 2) continue;
+          int v = (int)e.num("V");
+          // an item registration wins over the block of the same id
+          if (k->s[0] == '\x02' || !ids.count(v)) ids[v] = k->s.substr(1);
+        }
+  } catch (const exception &e) {
+    fprintf(stderr, "containers: failed to read level.dat: %s\n", e.what());
+  }
+
+  map<int, map<ItemKey, int64_t>> items;
+  map<int, map<string, int64_t>> tiles;
+  lock_guard<mutex> l(container_lock);
+  for_each_dimension(savepath, [&](path directory, int dimension) -> void {
+    path regions = directory / "region";
+    if (!exists(regions)) return;
+    for (auto &ent : directory_iterator(regions)) {
+      if (ent.path().extension() != ".mca") continue;
+      struct stat st;
+      if (stat(ent.path().c_str(), &st) != 0) continue;
+      RegionContainers &r = container_cache[ent.path().string()];
+      if (r.mtime != st.st_mtime || r.size != st.st_size) {
+        r = RegionContainers{};
+        r.mtime = st.st_mtime;
+        r.size = st.st_size;
+        scan_region(ent.path(), r);
+      }
+      for (auto &[k, v] : r.items) items[dimension][k] += v;
+      for (auto &[k, v] : r.tiles) tiles[dimension][k] += v;
+    }
+  });
+
+  out += "# HELP container_items Items stored in tile entity inventories (chests, drawers, machines), per dimension\n# TYPE container_items gauge\n";
+  for (auto &[dim, m] : items) {
+    for (auto &[k, count] : m) {
+      auto idn = ids.find(k.id);
+      string reg = idn != ids.end() ? idn->second : to_string(k.id);
+      string name = reg + ":" + to_string(k.damage);
+      auto names = item_names.find(reg);
+      if (names != item_names.end()) {
+        auto n = names->second.find(k.damage);
+        if (n != names->second.end()) name = n->second;
+      }
+      fmt(out, "container_items{dim=\"%d\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          dim, esc(name).c_str(), esc(reg).c_str(), k.damage, count);
+    }
+  }
+  out += "# HELP container_tiles Tile entities holding items, per dimension and tile entity type\n# TYPE container_tiles gauge\n";
+  for (auto &[dim, m] : tiles)
+    for (auto &[type, n] : m) fmt(out, "container_tiles{dim=\"%d\",type=\"%s\"} %ld\n", dim, esc(type).c_str(), n);
+}
+
 void collect_all(const path savepath, string &out) {
   auto start = chrono::steady_clock::now();
   collect_pollution(savepath, out);
   collect_world(savepath, out);
   collect_players(savepath, out);
+  collect_containers(savepath, out);
   fmt(out, "# HELP exporter_scrape_duration_seconds Time spent reading the save\n# TYPE exporter_scrape_duration_seconds gauge\nexporter_scrape_duration_seconds %f\n",
       chrono::duration<double>(chrono::steady_clock::now() - start).count());
 }
 
 static void usage(const char *argv0) {
-  printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>]\n"
+  printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>] [-n <items.json>]\n"
+         "  -n  texture-dump's items.json, gives container_items real names (\"Iron Ingot\")\n"
          "  -l  serve prometheus metrics over http (default :9150)\n"
          "  -o  write a node_exporter textfile every 10s. with -o alone there is no http server,\n"
          "      with both -o and -l it does both\n", argv0);
@@ -315,8 +488,19 @@ int main(int argc, char **argv) {
   int port = 9150;
   bool listen = false;
   int opt;
-  while ((opt = getopt(argc, argv, "p:o:l:h")) != -1) {
+  while ((opt = getopt(argc, argv, "p:o:l:n:h")) != -1) {
     switch (opt) {
+    case 'n':
+      try {
+        // keep the document alive, items() only refers into it
+        json names = json::parse(readFile(optarg));
+        for (auto &[reg, damages] : names.items())
+          for (auto &[damage, name] : damages.items()) item_names[reg][atoi(damage.c_str())] = name.get<string>();
+        printf("loaded names for %zu items from %s\n", item_names.size(), optarg);
+      } catch (const exception &e) {
+        fprintf(stderr, "failed to load %s: %s\n", optarg, e.what());
+      }
+      break;
     case 'p':
       savepath = optarg;
       break;
