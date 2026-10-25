@@ -1,0 +1,7 @@
+[{
+  "modid": "mapper-servermetrics",
+  "name": "Mapper Server Metrics",
+  "description": "Tick times, chunks, entities, players and world activity as JMX beans, for the prometheus jmx exporter",
+  "version": "1.0",
+  "mcversion": "1.7.10"
+}]

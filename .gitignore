@@ -8,3 +8,5 @@ tile-history
 web/
 texture-dump/build/
 texture-dump/texture-dump.jar
+server-metrics/build/
+server-metrics/server-metrics.jar

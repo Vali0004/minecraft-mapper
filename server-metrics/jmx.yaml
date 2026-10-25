@@ -1,0 +1,26 @@
+# prometheus jmx exporter config for the GTNH server, see server-metrics/ in minecraft-mapper.
+# JVM memory, GC, threads and classes come from the agent's built in collectors. the rules turn the
+# server-metrics mod's "gtnh" beans into minecraft_* metrics, anything else is exported as is
+lowercaseOutputName: true
+rules:
+  - pattern: 'gtnh<type=Server><>(\w+)'
+    name: minecraft_server_$1
+  - pattern: 'gtnh<type=Dimension, dim=(-?\d+)><>(\w+)'
+    name: minecraft_dimension_$2
+    labels:
+      dim: "$1"
+  - pattern: 'gtnh<type=Entity, dim=(-?\d+), name=(.+)><>count'
+    name: minecraft_entities
+    labels:
+      dim: "$1"
+      entity: "$2"
+  - pattern: 'gtnh<type=TileEntity, dim=(-?\d+), name=(.+)><>count'
+    name: minecraft_tile_entities
+    labels:
+      dim: "$1"
+      tile: "$2"
+  - pattern: 'gtnh<type=Player, name=(.+)><>(\w+)'
+    name: minecraft_player_$2
+    labels:
+      player: "$1"
+  - pattern: ".*"
