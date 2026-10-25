@@ -1862,7 +1862,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "sum by (item) (container_items{alias=\"$alias\",item=~\".* Ingot\"})",
+          "expr": "sum by (item) (container_items{alias=\"$alias\",team=~\"$team\",item=~\".* Ingot\"})",
           "legendFormat": "{{item}}",
           "refId": "A",
           "range": true
@@ -1922,7 +1922,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "topk(30, sum by (item) (container_items{alias=\"$alias\"}))",
+          "expr": "topk(30, sum by (item) (container_items{alias=\"$alias\",team=~\"$team\"}))",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -1978,7 +1978,7 @@
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "sum by (type) (container_tiles{alias=\"$alias\"})",
+          "expr": "sum by (type) (container_tiles{alias=\"$alias\",team=~\"$team\"})",
           "legendFormat": "",
           "refId": "A",
           "range": false,
@@ -2018,6 +2018,153 @@
           }
         ]
       }
+    },
+    {
+      "id": 24,
+      "type": "bargauge",
+      "title": "Leaderboard: Items Stored",
+      "description": "Every item in the containers of a team's claimed chunks",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 121,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sort_desc(sum by (team) (container_items{alias=\"$alias\"}))",
+          "legendFormat": "{{team}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "sizing": "auto"
+      }
+    },
+    {
+      "id": 25,
+      "type": "bargauge",
+      "title": "Leaderboard: Ingots",
+      "description": "",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 8,
+        "y": 121,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sort_desc(sum by (team) (container_items{alias=\"$alias\",item=~\".* Ingot\"}))",
+          "legendFormat": "{{team}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "sizing": "auto"
+      }
+    },
+    {
+      "id": 26,
+      "type": "bargauge",
+      "title": "Leaderboard: Claimed Chunks",
+      "description": "",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 16,
+        "y": 121,
+        "w": 8,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sort_desc(sum by (team) (claimed_chunks{alias=\"$alias\"}))",
+          "legendFormat": "{{team}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "sizing": "auto"
+      }
     }
   ],
   "preload": false,
@@ -2044,6 +2191,28 @@
           "refId": "alias"
         },
         "refresh": 1,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "datasource": "prometheus",
+        "definition": "label_values(claimed_chunks{alias=\"$alias\"}, team)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "label": "Team",
+        "name": "team",
+        "options": [],
+        "query": {
+          "query": "label_values(claimed_chunks{alias=\"$alias\"}, team)",
+          "refId": "team"
+        },
+        "refresh": 2,
         "regex": "",
         "sort": 1,
         "type": "query"

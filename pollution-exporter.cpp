@@ -17,6 +17,7 @@
 #include <cstdarg>
 #include <map>
 #include <mutex>
+#include <tuple>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>
 
@@ -297,9 +298,10 @@ void collect_players(const path savepath, string &out) {
 
 // containers
 //
-// item stacks in every tile entity inventory: chests, barrels, furnaces, machine slots ("Items": id, Damage,
-// Count) and Storage Drawers ("Slots": Item, Meta, Count). summed per dimension and item, a region file is
-// only parsed again when it changed on disk
+// item stacks in tile entity inventories: chests, barrels, furnaces, machine slots ("Items": id, Damage,
+// Count) and Storage Drawers ("Slots": Item, Meta, Count). only chunks claimed with ServerUtilities count,
+// so dungeon and village loot stays out, summed per team, dimension and item. a region file is only parsed
+// again when it changed on disk
 
 // texture-dump's items.json: registry name -> damage -> display name. without it items are named "mod:item:damage"
 static map<string, map<int, string>> item_names;
@@ -309,10 +311,14 @@ struct ItemKey {
   bool operator<(const ItemKey &o) const { return id != o.id ? id < o.id : damage < o.damage; }
 };
 
-struct RegionContainers {
-  int64_t mtime = 0, size = -1;
+struct ChunkContainers {
   map<ItemKey, int64_t> items;
   map<string, int64_t> tiles;  // tile entity id -> how many held items
+};
+
+struct RegionContainers {
+  int64_t mtime = 0, size = -1;
+  map<int, ChunkContainers> chunks;  // by index in the region, x + z * 32
 };
 
 static mutex container_lock;
@@ -395,12 +401,51 @@ static void scan_region(const path &p, RegionContainers &r) {
       bool any = false;
       for (auto &[slot, st] : te.stacks) {
         if (st.id <= 0 || st.count <= 0) continue;
-        r.items[{st.id, st.damage}] += st.count;
+        r.chunks[i].items[{st.id, st.damage}] += st.count;
         any = true;
       }
-      if (any) r.tiles[te.id.empty() ? "unknown" : te.id]++;
+      if (any) r.chunks[i].tiles[te.id.empty() ? "unknown" : te.id]++;
     }
   }
+}
+
+// ServerUtilities claims: teams/<id>.dat names the team, teams/claimedchunks/<id>.dat lists its chunks per dimension
+struct Claims {
+  map<tuple<int, int, int>, string> owner;  // (dim, chunk x, chunk z) -> team
+  map<pair<string, int>, int64_t> claimed, loaded;  // (team, dim) -> chunks
+};
+
+static Claims load_claims(const path savepath) {
+  Claims c;
+  path teams = savepath / "serverutilities" / "teams";
+  if (!exists(teams / "claimedchunks")) return c;
+  for (auto &ent : directory_iterator(teams / "claimedchunks")) {
+    if (ent.path().extension() != ".dat") continue;
+    string id = ent.path().stem().string(), team = id;
+    try {
+      // the team's title if it has one, else whoever owns it
+      if (exists(teams / ent.path().filename())) {
+        NbtTag t = loadGzipNbt(teams / ent.path().filename());
+        const NbtTag *title = t.get("Title"), *owner = t.get("Owner");
+        if (title && !title->s.empty()) team = title->s;
+        else if (owner && !owner->s.empty()) team = owner->s;
+      }
+      NbtTag cc = loadGzipNbt(ent.path());
+      const NbtTag *dims = cc.get("ClaimedChunks");
+      if (!dims) continue;
+      for (auto &[dimname, list] : dims->compound) {
+        int dim = atoi(dimname.c_str());
+        for (auto &ch : list.list) {
+          c.owner[{dim, (int)ch.num("x"), (int)ch.num("z")}] = team;
+          c.claimed[{team, dim}]++;
+          if (ch.num("loaded")) c.loaded[{team, dim}]++;
+        }
+      }
+    } catch (const exception &e) {
+      fprintf(stderr, "claims: failed to read %s: %s\n", ent.path().c_str(), e.what());
+    }
+  }
+  return c;
 }
 
 void collect_containers(const path savepath, string &out) {
@@ -421,8 +466,10 @@ void collect_containers(const path savepath, string &out) {
     fprintf(stderr, "containers: failed to read level.dat: %s\n", e.what());
   }
 
-  map<int, map<ItemKey, int64_t>> items;
-  map<int, map<string, int64_t>> tiles;
+  Claims claims = load_claims(savepath);
+  // (team, dim) -> totals
+  map<pair<string, int>, map<ItemKey, int64_t>> items;
+  map<pair<string, int>, map<string, int64_t>> tiles;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
     path regions = directory / "region";
@@ -431,6 +478,8 @@ void collect_containers(const path savepath, string &out) {
       if (ent.path().extension() != ".mca") continue;
       struct stat st;
       if (stat(ent.path().c_str(), &st) != 0) continue;
+      int rx, rz;
+      if (sscanf(ent.path().filename().c_str(), "r.%d.%d.mca", &rx, &rz) != 2) continue;
       RegionContainers &r = container_cache[ent.path().string()];
       if (r.mtime != st.st_mtime || r.size != st.st_size) {
         r = RegionContainers{};
@@ -438,13 +487,19 @@ void collect_containers(const path savepath, string &out) {
         r.size = st.st_size;
         scan_region(ent.path(), r);
       }
-      for (auto &[k, v] : r.items) items[dimension][k] += v;
-      for (auto &[k, v] : r.tiles) tiles[dimension][k] += v;
+      for (auto &[i, chunk] : r.chunks) {
+        auto claim = claims.owner.find({dimension, rx * 32 + (i & 31), rz * 32 + (i >> 5)});
+        if (claim == claims.owner.end()) continue;
+        pair<string, int> key{claim->second, dimension};
+        for (auto &[k, v] : chunk.items) items[key][k] += v;
+        for (auto &[k, v] : chunk.tiles) tiles[key][k] += v;
+      }
     }
   });
 
-  out += "# HELP container_items Items stored in tile entity inventories (chests, drawers, machines), per dimension\n# TYPE container_items gauge\n";
-  for (auto &[dim, m] : items) {
+  out += "# HELP container_items Items stored in tile entity inventories (chests, drawers, machines) in claimed chunks, per team and dimension\n# TYPE container_items gauge\n";
+  for (auto &[key, m] : items) {
+    auto &[team, dim] = key;
     for (auto &[k, count] : m) {
       auto idn = ids.find(k.id);
       string reg = idn != ids.end() ? idn->second : to_string(k.id);
@@ -454,13 +509,21 @@ void collect_containers(const path savepath, string &out) {
         auto n = names->second.find(k.damage);
         if (n != names->second.end()) name = n->second;
       }
-      fmt(out, "container_items{dim=\"%d\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
-          dim, esc(name).c_str(), esc(reg).c_str(), k.damage, count);
+      fmt(out, "container_items{team=\"%s\",dim=\"%d\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), dim, esc(name).c_str(), esc(reg).c_str(), k.damage, count);
     }
   }
-  out += "# HELP container_tiles Tile entities holding items, per dimension and tile entity type\n# TYPE container_tiles gauge\n";
-  for (auto &[dim, m] : tiles)
-    for (auto &[type, n] : m) fmt(out, "container_tiles{dim=\"%d\",type=\"%s\"} %ld\n", dim, esc(type).c_str(), n);
+  out += "# HELP container_tiles Tile entities holding items in claimed chunks, per team, dimension and type\n# TYPE container_tiles gauge\n";
+  for (auto &[key, m] : tiles)
+    for (auto &[type, n] : m)
+      fmt(out, "container_tiles{team=\"%s\",dim=\"%d\",type=\"%s\"} %ld\n", esc(key.first).c_str(), key.second, esc(type).c_str(), n);
+  out += "# HELP claimed_chunks Chunks claimed with ServerUtilities, per team and dimension\n# TYPE claimed_chunks gauge\n";
+  for (auto &[key, n] : claims.claimed)
+    fmt(out, "claimed_chunks{team=\"%s\",dim=\"%d\"} %ld\n", esc(key.first).c_str(), key.second, n);
+  out += "# HELP claimed_chunks_loaded Claimed chunks that are also force loaded, per team and dimension\n# TYPE claimed_chunks_loaded gauge\n";
+  for (auto &[key, n] : claims.claimed)
+    fmt(out, "claimed_chunks_loaded{team=\"%s\",dim=\"%d\"} %ld\n", esc(key.first).c_str(), key.second,
+        claims.loaded.count(key) ? claims.loaded.at(key) : 0);
 }
 
 void collect_all(const path savepath, string &out) {
