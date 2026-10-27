@@ -13,6 +13,8 @@ struct nbt_callbacks_s {
   void (*tag3)(const nbt_callbacks *, const std::string key, int32_t value);
   void (*tag7)(const nbt_callbacks *, const std::string key, int size, const uint8_t *data);
   void (*tag8)(const nbt_callbacks *, const std::string key, const std::string value);
+  // floats and doubles (tags 5 and 6), both as a double
+  void (*tagf)(const nbt_callbacks *, const std::string key, double value);
   void *state;
 };
 

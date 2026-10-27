@@ -2173,7 +2173,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 130,
+        "y": 160,
         "w": 24,
         "h": 1
       },
@@ -2186,7 +2186,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 131,
+        "y": 161,
         "w": 6,
         "h": 4
       },
@@ -2247,7 +2247,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 6,
-        "y": 131,
+        "y": 161,
         "w": 6,
         "h": 4
       },
@@ -2308,7 +2308,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 131,
+        "y": 161,
         "w": 6,
         "h": 4
       },
@@ -2352,7 +2352,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 18,
-        "y": 131,
+        "y": 161,
         "w": 6,
         "h": 4
       },
@@ -2397,7 +2397,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 135,
+        "y": 165,
         "w": 12,
         "h": 9
       },
@@ -2467,7 +2467,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 135,
+        "y": 165,
         "w": 12,
         "h": 9
       },
@@ -2521,7 +2521,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 144,
+        "y": 174,
         "w": 12,
         "h": 9
       },
@@ -2583,7 +2583,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 144,
+        "y": 174,
         "w": 12,
         "h": 9
       },
@@ -2637,7 +2637,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 153,
+        "y": 183,
         "w": 8,
         "h": 8
       },
@@ -2691,7 +2691,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 153,
+        "y": 183,
         "w": 8,
         "h": 8
       },
@@ -2745,7 +2745,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 153,
+        "y": 183,
         "w": 8,
         "h": 8
       },
@@ -2806,7 +2806,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 161,
+        "y": 191,
         "w": 24,
         "h": 1
       },
@@ -2819,7 +2819,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -2881,7 +2881,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 4,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -2942,7 +2942,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -2986,7 +2986,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -3030,7 +3030,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -3074,7 +3074,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 20,
-        "y": 162,
+        "y": 192,
         "w": 4,
         "h": 4
       },
@@ -3119,7 +3119,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 166,
+        "y": 196,
         "w": 12,
         "h": 9
       },
@@ -3182,7 +3182,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 166,
+        "y": 196,
         "w": 12,
         "h": 9
       },
@@ -3239,7 +3239,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 175,
+        "y": 205,
         "w": 12,
         "h": 9
       },
@@ -3310,7 +3310,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 175,
+        "y": 205,
         "w": 12,
         "h": 9
       },
@@ -3373,7 +3373,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 184,
+        "y": 214,
         "w": 8,
         "h": 8
       },
@@ -3557,7 +3557,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 184,
+        "y": 214,
         "w": 8,
         "h": 8
       },
@@ -3620,7 +3620,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 184,
+        "y": 214,
         "w": 8,
         "h": 8
       },
@@ -3683,7 +3683,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 192,
+        "y": 222,
         "w": 12,
         "h": 9
       },
@@ -3740,7 +3740,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 192,
+        "y": 222,
         "w": 12,
         "h": 9
       },
@@ -3796,7 +3796,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 201,
+        "y": 231,
         "w": 12,
         "h": 10
       },
@@ -3852,7 +3852,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 201,
+        "y": 231,
         "w": 12,
         "h": 10
       },
@@ -3909,7 +3909,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 211,
+        "y": 241,
         "w": 12,
         "h": 9
       },
@@ -3988,7 +3988,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 211,
+        "y": 241,
         "w": 12,
         "h": 9
       },
@@ -4022,6 +4022,514 @@
             "fillOpacity": 0,
             "showPoints": "never",
             "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 59,
+      "type": "row",
+      "title": "Fluids and Steam",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 130,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 60,
+      "type": "stat",
+      "title": "Steam Production",
+      "description": "L per second (1 L = 1 mB) from Railcraft and GregTech boilers, as of the last world save. GT solar boilers aren't included, their output depends on sunlight",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 131,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "(sum(railcraft_boiler_steam_mb_per_tick{alias=\"$alias\",team=~\"$team\"}) * 20 or vector(0)) + (sum(gt_boiler_steam_l_per_second{alias=\"$alias\",team=~\"$team\"} >= 0) or vector(0))",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 61,
+      "type": "stat",
+      "title": "Boilers Burning",
+      "description": "",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 6,
+        "y": 131,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "(sum(railcraft_boiler_burning{alias=\"$alias\",team=~\"$team\"}) or vector(0)) + (sum(gt_boiler_active{alias=\"$alias\",team=~\"$team\"}) or vector(0))",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 62,
+      "type": "stat",
+      "title": "Oil Stored",
+      "description": "mB of oil in tanks and machines in claimed chunks",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 131,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum(container_fluids{alias=\"$alias\",team=~\"$team\",fluid=~\"oil|liquid_.*oil.*\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 63,
+      "type": "stat",
+      "title": "Steam Stored",
+      "description": "mB of steam in boilers, tanks and pipes",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 18,
+        "y": 131,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum(container_fluids{alias=\"$alias\",team=~\"$team\",fluid=\"steam\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 64,
+      "type": "timeseries",
+      "title": "Steam Production per Boiler",
+      "description": "L per second. Railcraft: every cycle (8 ticks high pressure, 16 low) a boiling boiler (heat at least 100) turns tanks x heat / 500 water into 160 times as much steam, as far as its water lasts. GregTech: full rate above 100 degrees with water (Small Coal 120, High Pressure Coal 300, Lava 600). Solar boilers are left out",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 135,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "railcraft_boiler_steam_mb_per_tick{alias=\"$alias\",team=~\"$team\"} * 20",
+          "legendFormat": "Railcraft {{pressure}} pressure, {{tanks}} tanks at {{x}} {{y}} {{z}}",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "gt_boiler_steam_l_per_second{alias=\"$alias\",team=~\"$team\"} >= 0",
+          "legendFormat": "GT {{boiler}} at {{x}} {{y}} {{z}}",
+          "refId": "B",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter",
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 65,
+      "type": "timeseries",
+      "title": "Boiler Heat and Temperature",
+      "description": "Railcraft heat boils from 100 (max 500 low pressure, 1000 high), GregTech boilers make steam above 100 degrees",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 135,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "railcraft_boiler_heat{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "Railcraft {{x}} {{y}} {{z}}",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "max(railcraft_boiler_max_heat{alias=\"$alias\",team=~\"$team\"})",
+          "legendFormat": "max heat",
+          "refId": "B",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "gt_boiler_temperature{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "GT {{boiler}} {{x}} {{y}} {{z}}",
+          "refId": "C",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 66,
+      "type": "timeseries",
+      "title": "Fluids Stored",
+      "description": "mB per fluid in tile entities of claimed chunks (tanks, machines, pipes)",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 144,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum by (fluid) (container_fluids{alias=\"$alias\",team=~\"$team\"})",
+          "legendFormat": "{{fluid}}",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter",
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 67,
+      "type": "table",
+      "title": "Fluids by Container",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 144,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum by (fluid, type) (container_fluids{alias=\"$alias\",team=~\"$team\"})",
+          "legendFormat": "",
+          "refId": "A",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "fluid": "Fluid",
+              "type": "Tile Entity",
+              "Value": "mB"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "mB",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "id": 68,
+      "type": "timeseries",
+      "title": "Boiler Water and Steam",
+      "description": "",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 153,
+        "w": 24,
+        "h": 7
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "(sum(railcraft_boiler_water_mb{alias=\"$alias\",team=~\"$team\"}) or vector(0)) + (sum(gt_boiler_water_l{alias=\"$alias\",team=~\"$team\"}) or vector(0))",
+          "legendFormat": "water",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "(sum(railcraft_boiler_steam_mb{alias=\"$alias\",team=~\"$team\"}) or vector(0)) + (sum(gt_boiler_steam_l{alias=\"$alias\",team=~\"$team\"}) or vector(0))",
+          "legendFormat": "steam waiting",
+          "refId": "B",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter",
             "stacking": {
               "group": "A",
               "mode": "none"

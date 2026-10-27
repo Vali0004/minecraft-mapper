@@ -15,6 +15,7 @@
 #include "nbt_tree.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdarg>
 #include <map>
 #include <mutex>
@@ -313,9 +314,41 @@ struct ItemKey {
   bool operator<(const ItemKey &o) const { return id != o.id ? id < o.id : damage < o.damage; }
 };
 
+struct Boiler {
+  int x, y, z, tanks;
+  string pressure;
+  double heat, max_heat, steam_per_tick;
+  bool burning;
+  int64_t water, steam;
+};
+
+// GregTech single block boilers, from GT 5.09.51's MetaTileEntityIDs and MTEBoiler: every 10 ticks, while
+// mTemperature > 100 and there is water, a boiler makes half its getProductionPerSecond(), so above 100 it runs
+// at its full rate. solar boilers' output depends on config, calcification and sunlight, none of which is in the
+// save, so they get no production figure
+struct GtBoilerSpec { int id; const char *name; int steam_per_second; int max_temperature; };
+static const GtBoilerSpec gt_boilers[] = {
+  { 100, "Small Coal Boiler", 120, 500 },
+  { 101, "High Pressure Coal Boiler", 300, 1000 },
+  { 102, "High Pressure Lava Boiler", 600, 1000 },
+  { 105, "Simple Solar Boiler", -1, 500 },
+  { 114, "High Pressure Solar Boiler", -1, 1000 },
+};
+
+struct GtBoiler {
+  int x, y, z;
+  string name;
+  double temperature, max_temperature, steam_per_second;  // NaN steam_per_second: can't be worked out (solar)
+  bool active;
+  int64_t water, steam;
+};
+
 struct ChunkContainers {
   map<ItemKey, int64_t> items;
   map<string, int64_t> tiles;  // tile entity id -> how many held items
+  map<pair<string, string>, int64_t> fluids;  // (fluid, tile entity id) -> mB
+  vector<Boiler> boilers;
+  vector<GtBoiler> gt_boilers;
 };
 
 struct RegionContainers {
@@ -331,9 +364,18 @@ struct StackParse {
   int64_t count = 0;
 };
 
+struct FluidParse {
+  string name;
+  int64_t amount = 0;
+};
+
 struct TileParse {
   string id;
   map<int, StackParse> stacks;  // by "Items/<i>" or "Slots/<i>", slots offset to keep them apart
+  // any compound holding FluidName and Amount, at any depth: Railcraft "tanks/<i>", GT "mFluid", a certus
+  // quartz tank's root, TConstruct "Liquids/<i>"... keyed by the compound's path inside the tile entity
+  map<string, FluidParse> fluids;
+  map<string, double> numbers;  // the tile entity's own top level numbers (heat, pattern, master, x...)
 };
 
 struct ChunkParse {
@@ -357,7 +399,37 @@ static StackParse *stack_field(ChunkParse *c, const string &key, const char *&fi
   return &c->tiles[te].stacks[offset + slot];
 }
 
+// "/Level/TileEntities/<n>/<rest>" -> the tile entity and <rest>
+static TileParse *tile_field(ChunkParse *c, const string &key, const char *&rest) {
+  static const char prefix[] = "/Level/TileEntities/";
+  if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return nullptr;
+  char *end;
+  int te = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
+  if (*end != '/') return nullptr;
+  rest = end + 1;
+  return &c->tiles[te];
+}
+
+// a FluidName or Amount: the compound around it is a fluid stack
+static FluidParse *fluid_field(TileParse *te, const char *rest, const char *field) {
+  const char *slash = strrchr(rest, '/');
+  const char *last = slash ? slash + 1 : rest;
+  if (strcmp(last, field) != 0) return nullptr;
+  return &te->fluids[string(rest, slash ? slash - rest : 0)];
+}
+
+static void tile_number(const nbt_callbacks *cb, const string &key, double v) {
+  const char *rest;
+  TileParse *te = tile_field((ChunkParse *)cb->state, key, rest);
+  if (!te) return;
+  if (!strchr(rest, '/')) te->numbers[rest] = v;
+  if (FluidParse *f = fluid_field(te, rest, "Amount")) f->amount = (int64_t)v;
+}
+
+static void tagf_tile(const nbt_callbacks *cb, const string key, double v) { tile_number(cb, key, v); }
+
 static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) {
+  tile_number(cb, key, (double)v);
   const char *field;
   StackParse *st = stack_field((ChunkParse *)cb->state, key, field);
   if (!st) return;
@@ -370,12 +442,20 @@ static void tag1_stack(const nbt_callbacks *cb, const string key, uint8_t v) { s
 static void tag2_stack(const nbt_callbacks *cb, const string key, uint16_t v) { stack_number(cb, key, (int16_t)v); }
 static void tag3_stack(const nbt_callbacks *cb, const string key, int32_t v) { stack_number(cb, key, v); }
 static void tag8_tile(const nbt_callbacks *cb, const string key, const string v) {
-  static const char prefix[] = "/Level/TileEntities/";
-  if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return;
-  char *end;
-  int te = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
-  if (!strcmp(end, "/id")) ((ChunkParse *)cb->state)->tiles[te].id = v;
+  const char *rest;
+  TileParse *te = tile_field((ChunkParse *)cb->state, key, rest);
+  if (!te) return;
+  if (!strcmp(rest, "id")) te->id = v;
+  if (FluidParse *f = fluid_field(te, rest, "FluidName")) f->name = v;
 }
+
+// Railcraft boilers, from Railcraft 9.16's TileBoiler.patterns (the "pattern" a boiler saves indexes it) and
+// SteamBoiler.convertSteam: every ticksPerCycle ticks, while heat >= 100, numTanks * heat / 500 water turns
+// into 160 times as much steam, as far as the water lasts
+static const struct { int width, height, ticks_per_cycle; const char *pressure; } railcraft_boilers[] = {
+  { 3, 4, 8, "high" }, { 3, 3, 8, "high" }, { 3, 2, 8, "high" }, { 2, 3, 8, "high" }, { 2, 2, 8, "high" }, { 1, 1, 8, "high" },
+  { 3, 4, 16, "low" }, { 3, 3, 16, "low" }, { 3, 2, 16, "low" }, { 2, 3, 16, "low" }, { 2, 2, 16, "low" }, { 1, 1, 16, "low" },
+};
 
 static void scan_region(const path &p, RegionContainers &r) {
   string data = readFile(p);
@@ -399,6 +479,7 @@ static void scan_region(const path &p, RegionContainers &r) {
     cb.tag2 = tag2_stack;
     cb.tag3 = tag3_stack;
     cb.tag8 = tag8_tile;
+    cb.tagf = tagf_tile;
     parseNBT(buf.data(), got, &cb, false);
     for (auto &[n, te] : chunk.tiles) {
       bool any = false;
@@ -407,7 +488,53 @@ static void scan_region(const path &p, RegionContainers &r) {
         r.chunks[i].items[{st.id, st.damage}] += st.count;
         any = true;
       }
-      if (any) r.chunks[i].tiles[te.id.empty() ? "unknown" : te.id]++;
+      const string type = te.id.empty() ? "unknown" : te.id;
+      for (auto &[where, f] : te.fluids) {
+        if (f.name.empty() || f.amount <= 0) continue;
+        r.chunks[i].fluids[{f.name, type}] += f.amount;
+        any = true;
+      }
+      if (any) r.chunks[i].tiles[type]++;
+
+      if (te.id == "BaseMetaTileEntity") {
+        int id = (int)te.numbers["mID"];
+        for (auto &spec : gt_boilers) {
+          if (spec.id != id) continue;
+          GtBoiler b;
+          b.x = (int)te.numbers["x"]; b.y = (int)te.numbers["y"]; b.z = (int)te.numbers["z"];
+          b.name = spec.name;
+          b.temperature = te.numbers["mTemperature"];
+          b.max_temperature = spec.max_temperature;
+          b.active = te.numbers["mActive"] != 0;
+          b.water = te.fluids.count("mFluid") && te.fluids["mFluid"].name == "water" ? te.fluids["mFluid"].amount : 0;
+          b.steam = te.fluids.count("mSteam") ? te.fluids["mSteam"].amount : 0;
+          if (spec.steam_per_second < 0) b.steam_per_second = NAN;
+          else b.steam_per_second = b.temperature > 100 && b.water > 0 ? spec.steam_per_second : 0;
+          r.chunks[i].gt_boilers.push_back(b);
+        }
+      }
+
+      // the firebox of a formed boiler's master block holds the whole boiler's state
+      if ((te.id == "RCBoilerFireboxSoildTile" || te.id == "RCBoilerFireboxLiquidTile") && te.numbers["master"] == 1) {
+        int pattern = (int)te.numbers["pattern"];
+        if (pattern < 0 || pattern >= (int)size(railcraft_boilers)) continue;
+        auto &spec = railcraft_boilers[pattern];
+        Boiler b;
+        b.x = (int)te.numbers["x"]; b.y = (int)te.numbers["y"]; b.z = (int)te.numbers["z"];
+        b.tanks = spec.width * spec.width * spec.height;
+        b.pressure = spec.pressure;
+        b.heat = te.numbers["heat"];
+        b.max_heat = te.numbers["maxHeat"];
+        b.burning = te.numbers["burnTime"] > 0;
+        b.water = b.steam = 0;
+        for (auto &[where, f] : te.fluids) {
+          if (f.name == "water") b.water += f.amount;
+          else if (f.name == "steam") b.steam += f.amount;
+        }
+        double water_per_cycle = b.heat >= 100 ? b.tanks * b.heat / 500.0 : 0;
+        b.steam_per_tick = 160.0 * min(water_per_cycle, (double)b.water) / spec.ticks_per_cycle;
+        r.chunks[i].boilers.push_back(b);
+      }
     }
   }
 }
@@ -473,6 +600,9 @@ void collect_containers(const path savepath, string &out) {
   // (team, dim) -> totals
   map<pair<string, int>, map<ItemKey, int64_t>> items;
   map<pair<string, int>, map<string, int64_t>> tiles;
+  map<pair<string, int>, map<pair<string, string>, int64_t>> fluids;
+  vector<tuple<string, int, Boiler>> boilers;
+  vector<tuple<string, int, GtBoiler>> gt;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
     path regions = directory / "region";
@@ -496,6 +626,9 @@ void collect_containers(const path savepath, string &out) {
         pair<string, int> key{claim->second, dimension};
         for (auto &[k, v] : chunk.items) items[key][k] += v;
         for (auto &[k, v] : chunk.tiles) tiles[key][k] += v;
+        for (auto &[k, v] : chunk.fluids) fluids[key][k] += v;
+        for (auto &b : chunk.boilers) boilers.emplace_back(key.first, dimension, b);
+        for (auto &b : chunk.gt_boilers) gt.emplace_back(key.first, dimension, b);
       }
     }
   });
@@ -520,6 +653,47 @@ void collect_containers(const path savepath, string &out) {
   for (auto &[key, m] : tiles)
     for (auto &[type, n] : m)
       fmt(out, "container_tiles{team=\"%s\",dim=\"%d\",type=\"%s\"} %ld\n", esc(key.first).c_str(), key.second, esc(type).c_str(), n);
+  out += "# HELP container_fluids Fluid stored in tile entities (tanks, machines, pipes) in claimed chunks, in mB, per team, dimension, fluid and tile entity type\n# TYPE container_fluids gauge\n";
+  for (auto &[key, m] : fluids)
+    for (auto &[k, mb] : m)
+      fmt(out, "container_fluids{team=\"%s\",dim=\"%d\",fluid=\"%s\",type=\"%s\"} %ld\n",
+          esc(key.first).c_str(), key.second, esc(k.first).c_str(), esc(k.second).c_str(), mb);
+
+  // one series per boiler, there are only ever a handful
+  static const struct { const char *name, *help; } boiler_metrics[] = {
+    { "railcraft_boiler_steam_mb_per_tick", "Steam a Railcraft boiler makes per tick, from its heat, size and water as of the last save (Railcraft's own formula)" },
+    { "railcraft_boiler_heat", "Railcraft boiler heat, it boils from 100" },
+    { "railcraft_boiler_max_heat", "Railcraft boiler heat it can reach (500 low pressure, 1000 high pressure)" },
+    { "railcraft_boiler_burning", "1 while a Railcraft boiler has fuel burning" },
+    { "railcraft_boiler_water_mb", "Water in a Railcraft boiler" },
+    { "railcraft_boiler_steam_mb", "Steam waiting in a Railcraft boiler" },
+  };
+  for (int m = 0; m < (int)size(boiler_metrics); m++) {
+    fmt(out, "# HELP %s %s\n# TYPE %s gauge\n", boiler_metrics[m].name, boiler_metrics[m].help, boiler_metrics[m].name);
+    for (auto &[team, dim, b] : boilers) {
+      double v = m == 0 ? b.steam_per_tick : m == 1 ? b.heat : m == 2 ? b.max_heat : m == 3 ? (b.burning ? 1 : 0) : m == 4 ? b.water : b.steam;
+      fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",pressure=\"%s\",tanks=\"%d\"} %g\n", boiler_metrics[m].name,
+          esc(team).c_str(), dim, b.x, b.y, b.z, b.pressure.c_str(), b.tanks, v);
+    }
+  }
+
+  static const struct { const char *name, *help; } gt_metrics[] = {
+    { "gt_boiler_steam_l_per_second", "Steam a GregTech boiler makes per second as of the last save, its full rate above 100 degrees with water (NaN for solar, which depends on sunlight)" },
+    { "gt_boiler_temperature", "GregTech boiler temperature, it makes steam above 100" },
+    { "gt_boiler_max_temperature", "GregTech boiler temperature it can reach" },
+    { "gt_boiler_active", "1 while a GregTech boiler is burning fuel" },
+    { "gt_boiler_water_l", "Water in a GregTech boiler" },
+    { "gt_boiler_steam_l", "Steam waiting in a GregTech boiler" },
+  };
+  for (int m = 0; m < (int)size(gt_metrics); m++) {
+    fmt(out, "# HELP %s %s\n# TYPE %s gauge\n", gt_metrics[m].name, gt_metrics[m].help, gt_metrics[m].name);
+    for (auto &[team, dim, b] : gt) {
+      double v = m == 0 ? b.steam_per_second : m == 1 ? b.temperature : m == 2 ? b.max_temperature : m == 3 ? (b.active ? 1 : 0) : m == 4 ? b.water : b.steam;
+      fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",boiler=\"%s\"} %g\n", gt_metrics[m].name,
+          esc(team).c_str(), dim, b.x, b.y, b.z, b.name.c_str(), v);
+    }
+  }
+
   out += "# HELP claimed_chunks Chunks claimed with ServerUtilities, per team and dimension\n# TYPE claimed_chunks gauge\n";
   for (auto &[key, n] : claims.claimed)
     fmt(out, "claimed_chunks{team=\"%s\",dim=\"%d\"} %ld\n", esc(key.first).c_str(), key.second, n);

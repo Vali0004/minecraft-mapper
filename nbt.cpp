@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#include <string.h>
 #include "nbt.h"
 
 using namespace std;
@@ -81,15 +82,19 @@ void parseTag(string name_in, uint8_t tag, const uint8_t *nbt, int *pos, const n
   case 5: // 32bit float
   {
     uint32_t t = getint32(nbt, pos);
-    float value = *((float*)(&t));
+    float value;
+    memcpy(&value, &t, sizeof(value));
     if (verbose) printf("tag5 '%s' == %e\n", name_in.c_str(), value);
+    if (cb && cb->tagf) cb->tagf(cb, name_in, value);
     break;
   }
   case 6: // 64bit double
   {
     uint64_t t = getint64(nbt, pos);
-    double value = *((double*)(&t));
+    double value;
+    memcpy(&value, &t, sizeof(value));
     if (verbose) printf("tag6 '%s' == %e\n", name_in.c_str(), value);
+    if (cb && cb->tagf) cb->tagf(cb, name_in, value);
     break;
   }
   case 7: // byte array
