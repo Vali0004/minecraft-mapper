@@ -191,6 +191,23 @@ void collect_world(const path savepath, string &out) {
   }
   fmt(out, "# HELP world_day Current in-game day\n# TYPE world_day gauge\nworld_day{world=\"%s\"} %ld\n",
       lname.c_str(), (int64_t)data->num("DayTime") / 24000);
+
+  // Random Things' blood moon, in data/Bloodmoon.dat: {data: {bloodMoon, forceBloodMoon}}, as of the last save
+  path bloodmoon = savepath / "data" / "Bloodmoon.dat";
+  if (exists(bloodmoon)) {
+    try {
+      NbtTag bm = loadGzipNbt(bloodmoon);
+      const NbtTag *d = bm.get("data");
+      if (d && d->get("bloodMoon")) {
+        fmt(out, "# HELP world_blood_moon 1 while a Random Things blood moon is on, as of the last save\n# TYPE world_blood_moon gauge\nworld_blood_moon{world=\"%s\"} %g\n",
+            lname.c_str(), d->num("bloodMoon"));
+        fmt(out, "# HELP world_blood_moon_forced 1 when the next night is forced to be a blood moon (/bloodmoon)\n# TYPE world_blood_moon_forced gauge\nworld_blood_moon_forced{world=\"%s\"} %g\n",
+            lname.c_str(), d->num("forceBloodMoon"));
+      }
+    } catch (const exception &e) {
+      fprintf(stderr, "failed to read %s: %s\n", bloodmoon.c_str(), e.what());
+    }
+  }
 }
 
 // uuid -> name, from the server's usercache.json (next to the world dir)

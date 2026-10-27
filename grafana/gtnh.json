@@ -82,7 +82,7 @@
       "id": 2,
       "type": "stat",
       "title": "Weather",
-      "description": "",
+      "description": "Rain and thunder from level.dat, the blood moon from Random Things' data/Bloodmoon.dat, as of the last world save",
       "datasource": "prometheus",
       "gridPos": {
         "x": 4,
@@ -93,7 +93,7 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "world_raining{alias=\"$alias\"} + world_thundering{alias=\"$alias\"}",
+          "expr": "world_raining{alias=\"$alias\"} + world_thundering{alias=\"$alias\"} + (world_blood_moon{alias=\"$alias\"} * 10 or vector(0))",
           "legendFormat": "{{world}}",
           "range": true,
           "refId": "A",
@@ -133,6 +133,10 @@
               {
                 "value": 2,
                 "color": "purple"
+              },
+              {
+                "value": 10,
+                "color": "dark-red"
               }
             ]
           },
@@ -154,6 +158,21 @@
                 "2": {
                   "text": "Thunder",
                   "index": 2
+                },
+                "10": {
+                  "text": "Blood Moon",
+                  "color": "dark-red",
+                  "index": 3
+                },
+                "11": {
+                  "text": "Blood Moon, Rain",
+                  "color": "dark-red",
+                  "index": 4
+                },
+                "12": {
+                  "text": "Blood Moon, Thunder",
+                  "color": "dark-red",
+                  "index": 5
                 }
               }
             }
