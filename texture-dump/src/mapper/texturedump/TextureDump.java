@@ -170,12 +170,23 @@ public class TextureDump {
       if (stacks.isEmpty()) {
         try { stacks.add(stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class).newInstance(item, 1, 0)); } catch (Throwable t) {}
       }
+      // GregTech and Bartworks meta items name every material x prefix, but the creative menu only lists some
+      // (crushed ore of a material GT hides there, for one). ask for every damage value, a name comes from the
+      // material and prefix, an invalid one is empty, an untranslated key, or for Bartworks a "_NULL" material
+      if (name.startsWith("gregtech:gt.metaitem.") || name.startsWith("bartworks:gt.bwMetaGenerated")) {
+        try {
+          java.lang.reflect.Constructor<?> make = stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class);
+          for (int dmg = 0; dmg < 32767; dmg++) stacks.add(make.newInstance(item, 1, dmg));
+        } catch (Throwable t) {}
+      }
       Map<Integer, String> byDamage = new java.util.TreeMap<>();
       for (Object stack : stacks) {
         try {
           int damage = (Integer) call(stack, "func_77960_j", "getItemDamage");
           String display = (String) call(stack, "func_82833_r", "getDisplayName");
-          if (display != null && !byDamage.containsKey(damage)) byDamage.put(damage, display);
+          // Bartworks names materials it doesn't have "_NULL"
+          if (display != null && !display.trim().isEmpty() && !display.endsWith(".name") && !display.contains("_NULL") && !byDamage.containsKey(damage))
+            byDamage.put(damage, display);
         } catch (Throwable t) {}
       }
       if (byDamage.isEmpty()) continue;
