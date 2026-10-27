@@ -19,6 +19,7 @@
 #include <cstdarg>
 #include <map>
 #include <mutex>
+#include <regex>
 #include <tuple>
 #include <nlohmann/json.hpp>
 #include <sys/stat.h>
@@ -356,6 +357,23 @@ struct GtBoiler {
   map<ItemKey, int64_t> fuel_items;  // its inventory: fuel waiting, and ash
 };
 
+// block ids a miner's column walk needs, from the world's registry
+struct MinerBlocks {
+  int pipe = -1, tip = -1, bedrock = -1;
+};
+
+struct GtMiner {
+  int x, y, z, radius;
+  string machine;
+  bool active, at_bedrock;
+  double tip_y;  // NaN with no pipe down
+  // with no pipe down: the bottom of an open shaft under it (NaN without one), what's in the shaft now
+  // (sand that fell in after the pipe came out) can make this read higher than the miner went
+  double shaft_bottom_y;
+  const char *state;  // drilling, at_bedrock, retracted (no pipe, open shaft under it), idle
+  int64_t pipes;  // mining pipe in its inventory, what it has left to go deeper with
+};
+
 struct GtMachine {
   int x, y, z, id;
   bool active;
@@ -378,6 +396,7 @@ struct ChunkContainers {
   vector<Boiler> boilers;
   vector<GtBoiler> gt_boilers;
   vector<GtMachine> gt_machines;
+  vector<GtMiner> miners;
   vector<CokeOven> coke_ovens;
 };
 
@@ -411,7 +430,41 @@ struct TileParse {
 
 struct ChunkParse {
   map<int, TileParse> tiles;
+  // the chunk's sections, for walking a miner's pipe: section index -> its Y and its NotEnoughIDs Blocks16
+  // array (big endian ids, y z x order). the arrays point into the decompressed chunk, valid until the next one
+  map<int, int> section_y;
+  map<int, const uint8_t *> section_blocks;
+
+  // block id at chunk local x z and world y, 0 (air) for a section that isn't there
+  int block_at(int x, int y, int z) const {
+    if (y < 0 || y > 255) return 0;
+    for (auto &[i, sy] : section_y) {
+      if (sy != (y >> 4)) continue;
+      auto b = section_blocks.find(i);
+      if (b == section_blocks.end()) return 0;
+      const uint8_t *p = b->second + (((y & 15) * 256 + z * 16 + x) * 2);
+      return (p[0] << 8) | p[1];
+    }
+    return 0;
+  }
 };
+
+// "/Level/Sections/<i>/<field>" -> i and field
+static bool section_field(const string &key, int &index, const char *&field) {
+  static const char prefix[] = "/Level/Sections/";
+  if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return false;
+  char *end;
+  index = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
+  if (*end != '/') return false;
+  field = end + 1;
+  return true;
+}
+
+static void tag7_section(const nbt_callbacks *cb, const string key, int size, const uint8_t *data) {
+  int i;
+  const char *field;
+  if (section_field(key, i, field) && !strcmp(field, "Blocks16") && size == 8192) ((ChunkParse *)cb->state)->section_blocks[i] = data;
+}
 
 // "/Level/TileEntities/<n>/<list>/<i>/<field>" or ".../Item<i>/<field>", the stack and its field. only fields
 // directly in the entry count, an item's own NBT ("<list>/<i>/tag/...", a backpack's contents) doesn't
@@ -490,7 +543,15 @@ static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) 
   else if (!strcmp(field, "Slot") || !strcmp(field, "IntSlot")) st->slot = v;
 }
 
-static void tag1_stack(const nbt_callbacks *cb, const string key, uint8_t v) { stack_number(cb, key, (int8_t)v); }
+static void tag1_stack(const nbt_callbacks *cb, const string key, uint8_t v) {
+  int i;
+  const char *field;
+  if (section_field(key, i, field)) {
+    if (!strcmp(field, "Y")) ((ChunkParse *)cb->state)->section_y[i] = (int8_t)v;
+    return;
+  }
+  stack_number(cb, key, (int8_t)v);
+}
 static void tag2_stack(const nbt_callbacks *cb, const string key, uint16_t v) { stack_number(cb, key, (int16_t)v); }
 static void tag3_stack(const nbt_callbacks *cb, const string key, int32_t v) { stack_number(cb, key, v); }
 static void tag8_tile(const nbt_callbacks *cb, const string key, const string v) {
@@ -509,7 +570,7 @@ static const struct { int width, height, ticks_per_cycle; const char *pressure; 
   { 3, 4, 16, "low" }, { 3, 3, 16, "low" }, { 3, 2, 16, "low" }, { 2, 3, 16, "low" }, { 2, 2, 16, "low" }, { 1, 1, 16, "low" },
 };
 
-static void scan_region(const path &p, RegionContainers &r, const map<int, string> &ids) {
+static void scan_region(const path &p, RegionContainers &r, const map<int, string> &ids, const MinerBlocks &mb) {
   string data = readFile(p);
   if (data.size() < 8192) return;
   const uint8_t *d = (const uint8_t *)data.data();
@@ -528,6 +589,7 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
     nbt_callbacks cb = {};
     cb.state = &chunk;
     cb.tag1 = tag1_stack;
+    cb.tag7 = tag7_section;
     cb.tag2 = tag2_stack;
     cb.tag3 = tag3_stack;
     cb.tag8 = tag8_tile;
@@ -561,6 +623,53 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
         for (auto &[slot, st] : te.outputs)
           if (st.id > 0 && st.count > 0) m.outputs[{st.id, st.damage}] += st.count;
         r.chunks[i].gt_machines.push_back(m);
+
+        // GregTech's miners keep their depth (DrillingLogicDelegate.tipDepth) out of the save and find it again
+        // on load by walking down their mining pipe, so do the same: from the block under the miner down
+        // through IC2 mining pipe to the tip. it's hit bedrock when the block under the tip is bedrock
+        auto mn = gt_machine_names.find(m.id);
+        if (mn != gt_machine_names.end() && mn->second.size() > 6 && mn->second.compare(mn->second.size() - 6, 6, " Miner") == 0) {
+          GtMiner g;
+          g.x = m.x; g.y = m.y; g.z = m.z;
+          g.machine = mn->second;
+          g.radius = (int)te.numbers["radiusConfig"];
+          g.active = m.active;
+          g.pipes = 0;
+          for (auto &[slot, st] : te.stacks) {
+            auto idn = ids.find(st.id);
+            if (st.id > 0 && idn != ids.end() && (idn->second == "IC2:blockMiningPipe")) g.pipes += st.count;
+          }
+          int lx = m.x & 15, lz = m.z & 15, yy = m.y - 1, tip = -1;
+          while (yy >= 0) {
+            int b = chunk.block_at(lx, yy, lz);
+            if (b != mb.pipe && b != mb.tip) break;
+            tip = yy;
+            if (b == mb.tip) break;
+            yy--;
+          }
+          g.tip_y = tip >= 0 ? tip : NAN;
+          g.at_bedrock = tip >= 0 && (tip == 0 || chunk.block_at(lx, tip - 1, lz) == mb.bedrock);
+          g.shaft_bottom_y = NAN;
+          if (tip >= 0) {
+            g.state = g.at_bedrock ? "at_bedrock" : "drilling";
+          } else {
+            // no pipe: an open shaft starting within 3 blocks under it means it dug and pulled its pipe back in
+            g.state = "idle";
+            int top = -1;
+            for (int d = 1; d <= 3 && m.y - d >= 0; d++)
+              if (chunk.block_at(lx, m.y - d, lz) == 0) { top = m.y - d; break; }
+            if (top >= 0) {
+              int bottom = top;
+              while (bottom - 1 >= 0 && chunk.block_at(lx, bottom - 1, lz) == 0) bottom--;
+              // a couple of air blocks are no shaft
+              if (top - bottom >= 3) {
+                g.state = "retracted";
+                g.shaft_bottom_y = bottom;
+              }
+            }
+          }
+          r.chunks[i].miners.push_back(g);
+        }
       }
 
       // a coke oven's master block holds the oven's state. how long a batch takes, and what it gives, comes
@@ -680,6 +789,7 @@ static Claims load_claims(const path savepath) {
 void collect_containers(const path savepath, string &out) {
   // numeric ids are per world, level.dat has the registry ("\x02" items, "\x01" blocks)
   map<int, string> ids;
+  MinerBlocks mb;
   try {
     NbtTag level = loadGzipNbt(savepath / "level.dat");
     if (const NbtTag *fml = level.get("FML"))
@@ -690,6 +800,12 @@ void collect_containers(const path savepath, string &out) {
           int v = (int)e.num("V");
           // an item registration wins over the block of the same id
           if (k->s[0] == '\x02' || !ids.count(v)) ids[v] = k->s.substr(1);
+          if (k->s[0] == '\x01') {
+            string name = k->s.substr(1);
+            if (name == "IC2:blockMiningPipe") mb.pipe = v;
+            else if (name == "IC2:blockMiningTip") mb.tip = v;
+            else if (name == "minecraft:bedrock") mb.bedrock = v;
+          }
         }
   } catch (const exception &e) {
     fprintf(stderr, "containers: failed to read level.dat: %s\n", e.what());
@@ -703,6 +819,7 @@ void collect_containers(const path savepath, string &out) {
   vector<tuple<string, int, Boiler>> boilers;
   vector<tuple<string, int, GtBoiler>> gt;
   vector<tuple<string, int, GtMachine>> machines;
+  vector<tuple<string, int, GtMiner>> miners;
   vector<tuple<string, int, CokeOven>> ovens;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
@@ -719,7 +836,7 @@ void collect_containers(const path savepath, string &out) {
         r = RegionContainers{};
         r.mtime = st.st_mtime;
         r.size = st.st_size;
-        scan_region(ent.path(), r, ids);
+        scan_region(ent.path(), r, ids, mb);
       }
       for (auto &[i, chunk] : r.chunks) {
         auto claim = claims.owner.find({dimension, rx * 32 + (i & 31), rz * 32 + (i >> 5)});
@@ -731,6 +848,7 @@ void collect_containers(const path savepath, string &out) {
         for (auto &b : chunk.boilers) boilers.emplace_back(key.first, dimension, b);
         for (auto &b : chunk.gt_boilers) gt.emplace_back(key.first, dimension, b);
         for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
+        for (auto &m : chunk.miners) miners.emplace_back(key.first, dimension, m);
         for (auto &o : chunk.coke_ovens) ovens.emplace_back(key.first, dimension, o);
       }
     }
@@ -850,6 +968,59 @@ void collect_containers(const path savepath, string &out) {
       fmt(out, "gt_machine_output_items{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
           esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), esc(name).c_str(), esc(reg).c_str(), k.damage, n);
     }
+
+  static const struct { const char *name, *help; } miner_metrics[] = {
+    { "gt_miner_tip_y", "Y of a GregTech miner's mining pipe tip, NaN with no pipe down" },
+    { "gt_miner_depth", "How far a GregTech miner's pipe reaches below it" },
+    { "gt_miner_at_bedrock", "1 once the block under a GregTech miner's pipe tip is bedrock: it's done" },
+    { "gt_miner_radius", "A GregTech miner's work area radius (radiusConfig)" },
+    { "gt_miner_active", "1 while a GregTech miner is working" },
+    { "gt_miner_pipes", "Mining pipe left in a GregTech miner's inventory" },
+    { "gt_miner_shaft_bottom_y", "With its pipe pulled back in: where the open shaft under a GregTech miner ends, sand that fell in can make it read high (NaN without one)" },
+  };
+  for (int k = 0; k < (int)size(miner_metrics); k++) {
+    fmt(out, "# HELP %s %s\n# TYPE %s gauge\n", miner_metrics[k].name, miner_metrics[k].help, miner_metrics[k].name);
+    for (auto &[team, dim, g] : miners) {
+      double v = k == 0 ? g.tip_y : k == 1 ? (std::isnan(g.tip_y) ? 0 : g.y - g.tip_y) : k == 2 ? g.at_bedrock : k == 3 ? g.radius : k == 4 ? g.active : k == 5 ? g.pipes : g.shaft_bottom_y;
+      fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\"} %g\n", miner_metrics[k].name,
+          esc(team).c_str(), dim, g.x, g.y, g.z, esc(g.machine).c_str(), v);
+    }
+  }
+
+  out += "# HELP gt_miner_state A GregTech miner's state as the state label: drilling, at_bedrock, retracted (no pipe, open shaft under it), idle\n# TYPE gt_miner_state gauge\n";
+  for (auto &[team, dim, g] : miners)
+    fmt(out, "gt_miner_state{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",state=\"%s\"} 1\n",
+        esc(team).c_str(), dim, g.x, g.y, g.z, esc(g.machine).c_str(), g.state);
+
+  // unprocessed ore in storage, by GregTech processing stage, from item names (GregTech, Bartworks, GT++ and IC2
+  // all name them alike). steps is the fewest machine steps to a plain dust with LV and steam age machines:
+  // ore -macerate-> crushed -macerate-> impure dust -wash-> dust, purified -macerate-> purified dust -wash->
+  // dust, centrifuged -macerate-> dust. the longer routes give more byproducts, this is just the shortest
+  static const struct { const char *stage; regex pattern; int steps; } ore_stages[] = {
+    { "crushed", regex("^Crushed (.+) Ore$"), 2 },
+    { "purified", regex("^Purified (?:Crushed )?(.+) Ore$"), 2 },
+    { "centrifuged", regex("^Centrifuged (?:Crushed )?(.+) Ore$"), 1 },
+    { "impure_dust", regex("^Impure Pile of (.+) Dust$"), 1 },
+    { "purified_dust", regex("^Purified Pile of (.+) Dust$"), 1 },
+    { "ore", regex("^(?:Raw )?(.+) Ore$"), 3 },
+  };
+  map<tuple<string, int, string, string, int>, int64_t> ores;  // (team, dim, material, stage, steps) -> count
+  for (auto &[key, m] : items)
+    for (auto &[k, count] : m) {
+      string name = item_label(k).first;
+      smatch match;
+      for (auto &st : ore_stages)
+        if (regex_match(name, match, st.pattern)) {
+          ores[{key.first, key.second, match[1].str(), st.stage, st.steps}] += count;
+          break;
+        }
+    }
+  out += "# HELP gt_ore_items Unprocessed ore in claimed chunks, per material and processing stage, steps_to_dust is the fewest LV machine steps to a dust\n# TYPE gt_ore_items gauge\n";
+  for (auto &[k, n] : ores) {
+    auto &[team, dim, material, stage, steps] = k;
+    fmt(out, "gt_ore_items{team=\"%s\",dim=\"%d\",material=\"%s\",stage=\"%s\",steps_to_dust=\"%d\"} %ld\n",
+        esc(team).c_str(), dim, esc(material).c_str(), stage.c_str(), steps, n);
+  }
 
   static const struct { const char *name, *help; } oven_metrics[] = {
     { "railcraft_coke_oven_cooking", "1 while a Railcraft coke oven is cooking" },
