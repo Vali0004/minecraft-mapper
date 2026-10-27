@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 #include <arpa/inet.h>
 #include <assert.h>
+#include <ctype.h>
 #include <iostream>
 #include <stdio.h>
 #include <string.h>
@@ -299,7 +300,8 @@ void collect_players(const path savepath, string &out) {
 // containers
 //
 // item stacks in tile entity inventories: chests, barrels, furnaces, machine slots ("Items": id, Damage,
-// Count) and Storage Drawers ("Slots": Item, Meta, Count). only chunks claimed with ServerUtilities count,
+// Count), Storage Drawers ("Slots": Item, Meta, Count) and Draconic Evolution's placed items (one compound
+// per stack, "Item0", "Item1"...: id, Damage, Count). only chunks claimed with ServerUtilities count,
 // so dungeon and village loot stays out, summed per team, dimension and item. a region file is only parsed
 // again when it changed on disk
 
@@ -338,7 +340,7 @@ struct ChunkParse {
   map<int, TileParse> tiles;
 };
 
-// "/Level/TileEntities/<n>/Items/<i>/<field>" or ".../Slots/<i>/<field>", the stack and its field
+// "/Level/TileEntities/<n>/Items/<i>/<field>", ".../Slots/<i>/<field>" or ".../Item<i>/<field>", the stack and its field
 static StackParse *stack_field(ChunkParse *c, const string &key, const char *&field) {
   static const char prefix[] = "/Level/TileEntities/";
   if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return nullptr;
@@ -347,6 +349,7 @@ static StackParse *stack_field(ChunkParse *c, const string &key, const char *&fi
   int offset;
   if (!strncmp(end, "/Items/", 7)) { end += 7; offset = 0; }
   else if (!strncmp(end, "/Slots/", 7)) { end += 7; offset = 1 << 20; }
+  else if (!strncmp(end, "/Item", 5) && isdigit((unsigned char)end[5])) { end += 5; offset = 2 << 20; }
   else return nullptr;
   int slot = strtol(end, &end, 10);
   if (*end != '/') return nullptr;
