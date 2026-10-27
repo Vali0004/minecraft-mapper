@@ -195,6 +195,84 @@ public class TextureDump {
       wr.write(json.toString());
     }
     System.out.println("[texturedump] wrote " + names + " names of " + items + " items");
+    dumpGtMachines(dir);
+    dumpCokeOven(dir, nameOf, registry);
+  }
+
+  // texture-dump/gt_machines.json: GregTech meta tile entity id (a machine's "mID") -> display name
+  void dumpGtMachines(File dir) throws Exception {
+    Object[] mtes;
+    try {
+      mtes = (Object[]) Class.forName("gregtech.api.GregTechAPI").getField("METATILEENTITIES").get(null);
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no GregTech, skipping gt_machines.json");
+      return;
+    }
+    StringBuilder json = new StringBuilder("{\n");
+    int n = 0;
+    for (int id = 0; id < mtes.length; id++) {
+      if (mtes[id] == null) continue;
+      String name = null;
+      try { name = (String) mtes[id].getClass().getMethod("getLocalName").invoke(mtes[id]); } catch (Throwable t) {}
+      if (name == null) try { name = (String) mtes[id].getClass().getMethod("getMetaName").invoke(mtes[id]); } catch (Throwable t) {}
+      if (name == null) continue;
+      if (n++ > 0) json.append(",\n");
+      json.append("  \"").append(id).append("\":\"").append(escape(name)).append("\"");
+    }
+    json.append("\n}\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "gt_machines.json")), StandardCharsets.UTF_8)) {
+      wr.write(json.toString());
+    }
+    System.out.println("[texturedump] wrote " + n + " GregTech machine names");
+  }
+
+  // texture-dump/coke_oven.json: Railcraft coke oven recipes. a coke oven only saves how far it is, how long
+  // its batch takes and what it gives depends on the recipe for its input
+  void dumpCokeOven(File dir, Method nameOf, Object itemRegistry) throws Exception {
+    List<?> recipes;
+    try {
+      Object manager = Class.forName("mods.railcraft.api.crafting.RailcraftCraftingManager").getField("cokeOven").get(null);
+      recipes = (List<?>) manager.getClass().getMethod("getRecipes").invoke(manager);
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no Railcraft coke oven, skipping coke_oven.json");
+      return;
+    }
+    StringBuilder json = new StringBuilder("[\n");
+    int n = 0;
+    for (Object r : recipes) {
+      try {
+        Object in = r.getClass().getMethod("getInput").invoke(r), out = r.getClass().getMethod("getOutput").invoke(r);
+        Object fluid = r.getClass().getMethod("getFluidOutput").invoke(r);
+        int ticks = (Integer) r.getClass().getMethod("getCookTime").invoke(r);
+        if (in == null) continue;
+        StringBuilder e = new StringBuilder("  {");
+        e.append("\"input\":").append(stackJson(in, nameOf, itemRegistry));
+        if (out != null) e.append(",\"output\":").append(stackJson(out, nameOf, itemRegistry));
+        if (fluid != null) {
+          Object f = fluid.getClass().getMethod("getFluid").invoke(fluid);
+          String fname = (String) f.getClass().getMethod("getName").invoke(f);
+          int amount = fluid.getClass().getField("amount").getInt(fluid);
+          e.append(",\"fluid\":\"").append(escape(fname)).append("\",\"fluid_mb\":").append(amount);
+        }
+        e.append(",\"cook_ticks\":").append(ticks).append("}");
+        if (n++ > 0) json.append(",\n");
+        json.append(e);
+      } catch (Throwable t) {}
+    }
+    json.append("\n]\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "coke_oven.json")), StandardCharsets.UTF_8)) {
+      wr.write(json.toString());
+    }
+    System.out.println("[texturedump] wrote " + n + " coke oven recipes");
+  }
+
+  // {"item":"mod:name","damage":n,"count":n}, damage 32767 means any
+  String stackJson(Object stack, Method nameOf, Object itemRegistry) throws Exception {
+    Object item = call(stack, "func_77973_b", "getItem");
+    String name = String.valueOf(nameOf.invoke(itemRegistry, item));
+    int damage = (Integer) call(stack, "func_77960_j", "getItemDamage");
+    int count = (Integer) get(stack, "field_77994_a", "stackSize");
+    return "{\"item\":\"" + escape(name) + "\",\"damage\":" + damage + ",\"count\":" + count + "}";
   }
 
   static String escape(String s) {

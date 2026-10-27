@@ -309,6 +309,15 @@ void collect_players(const path savepath, string &out) {
 
 // texture-dump's items.json: registry name -> damage -> display name. without it items are named "mod:item:damage"
 static map<string, map<int, string>> item_names;
+// texture-dump's gt_machines.json: a GregTech machine's mID -> its display name
+static map<int, string> gt_machine_names;
+// texture-dump's coke_oven.json: Railcraft coke oven recipes, a coke oven only saves how far along it is
+struct CokeRecipe {
+  string output;  // registry name
+  int output_damage = 0, output_count = 0, fluid_mb = 0, cook_ticks = 0;
+  string fluid;
+};
+static map<pair<string, int>, CokeRecipe> coke_recipes;  // (input registry name, damage, 32767 = any) -> recipe
 
 struct ItemKey {
   int id, damage;
@@ -347,12 +356,29 @@ struct GtBoiler {
   map<ItemKey, int64_t> fuel_items;  // its inventory: fuel waiting, and ash
 };
 
+struct GtMachine {
+  int x, y, z, id;
+  bool active;
+  double progress, max_progress, eu_stored, steam_stored, eu_per_tick;
+  map<ItemKey, int64_t> outputs;
+};
+
+struct CokeOven {
+  int x, y, z;
+  bool cooking;
+  double cook_ticks, total_ticks, coke_per_second, creosote_mb_per_second;  // NaN when the recipe is unknown
+  ItemKey input{-1, 0};
+  string output;  // registry name of what it makes
+};
+
 struct ChunkContainers {
   map<ItemKey, int64_t> items;
   map<string, int64_t> tiles;  // tile entity id -> how many held items
   map<pair<string, string>, int64_t> fluids;  // (fluid, tile entity id) -> mB
   vector<Boiler> boilers;
   vector<GtBoiler> gt_boilers;
+  vector<GtMachine> gt_machines;
+  vector<CokeOven> coke_ovens;
 };
 
 struct RegionContainers {
@@ -364,7 +390,7 @@ static mutex container_lock;
 static map<string, RegionContainers> container_cache;
 
 struct StackParse {
-  int id = -1, damage = 0;
+  int id = -1, damage = 0, slot = -1;
   int64_t count = 0;
 };
 
@@ -376,6 +402,7 @@ struct FluidParse {
 struct TileParse {
   string id;
   map<string, StackParse> stacks;  // by "<list>/<i>" or "Item<i>"
+  map<string, StackParse> outputs;  // GregTech's mOutputItem<i>: what the running recipe will make, not stored
   // any compound holding FluidName and Amount, at any depth: Railcraft "tanks/<i>", GT "mFluid", a certus
   // quartz tank's root, TConstruct "Liquids/<i>"... keyed by the compound's path inside the tile entity
   map<string, FluidParse> fluids;
@@ -398,6 +425,13 @@ static StackParse *stack_field(ChunkParse *c, const string &key, const char *&fi
   const char *slash = strchr(name, '/');
   if (!slash) return nullptr;
   string stack;
+  // GregTech's mOutputItem<i>/<field>, the running recipe's outputs, kept apart from stored items
+  if (!strncmp(name, "mOutputItem", 11) && isdigit((unsigned char)name[11])) {
+    for (const char *d = name + 11; d < slash; d++) if (!isdigit((unsigned char)*d)) return nullptr;
+    field = slash + 1;
+    if (strchr(field, '/')) return nullptr;
+    return &c->tiles[te].outputs[string(name, slash - name)];
+  }
   if (!strncmp(name, "Item", 4) && isdigit((unsigned char)name[4])) {
     // Item<i>/<field>
     for (const char *d = name + 4; d < slash; d++) if (!isdigit((unsigned char)*d)) return nullptr;
@@ -453,6 +487,7 @@ static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) 
   if (!strcmp(field, "id") || !strcmp(field, "Item")) st->id = v;
   else if (!strcmp(field, "Damage") || !strcmp(field, "Meta")) st->damage = v;
   else if (!strcmp(field, "Count")) st->count = v;
+  else if (!strcmp(field, "Slot") || !strcmp(field, "IntSlot")) st->slot = v;
 }
 
 static void tag1_stack(const nbt_callbacks *cb, const string key, uint8_t v) { stack_number(cb, key, (int8_t)v); }
@@ -474,7 +509,7 @@ static const struct { int width, height, ticks_per_cycle; const char *pressure; 
   { 3, 4, 16, "low" }, { 3, 3, 16, "low" }, { 3, 2, 16, "low" }, { 2, 3, 16, "low" }, { 2, 2, 16, "low" }, { 1, 1, 16, "low" },
 };
 
-static void scan_region(const path &p, RegionContainers &r) {
+static void scan_region(const path &p, RegionContainers &r, const map<int, string> &ids) {
   string data = readFile(p);
   if (data.size() < 8192) return;
   const uint8_t *d = (const uint8_t *)data.data();
@@ -514,12 +549,54 @@ static void scan_region(const path &p, RegionContainers &r) {
       if (any) r.chunks[i].tiles[type]++;
 
       if (te.id == "BaseMetaTileEntity") {
+        GtMachine m;
+        m.x = (int)te.numbers["x"]; m.y = (int)te.numbers["y"]; m.z = (int)te.numbers["z"];
+        m.id = (int)te.numbers["mID"];
+        m.active = te.numbers["mActive"] != 0;
+        m.progress = te.numbers["mProgresstime"];
+        m.max_progress = te.numbers["mMaxProgresstime"];
+        m.eu_stored = te.numbers["mStoredEnergy"];
+        m.steam_stored = te.numbers["mStoredSteam"];
+        m.eu_per_tick = te.numbers["mEUt"];
+        for (auto &[slot, st] : te.outputs)
+          if (st.id > 0 && st.count > 0) m.outputs[{st.id, st.damage}] += st.count;
+        r.chunks[i].gt_machines.push_back(m);
+      }
+
+      // a coke oven's master block holds the oven's state. how long a batch takes, and what it gives, comes
+      // from the recipe for what's in its input slot (0)
+      if (te.id == "RCCokeOvenTile" && te.numbers["master"] == 1) {
+        CokeOven o;
+        o.x = (int)te.numbers["x"]; o.y = (int)te.numbers["y"]; o.z = (int)te.numbers["z"];
+        o.cooking = te.numbers["cooking"] != 0;
+        o.cook_ticks = te.numbers["cookTime"];
+        o.total_ticks = o.coke_per_second = o.creosote_mb_per_second = NAN;
+        for (auto &[slot, st] : te.stacks)
+          if (slot.rfind("invStructure/", 0) == 0 && st.slot == 0 && st.id > 0 && st.count > 0) o.input = {st.id, st.damage};
+        auto idn = ids.find(o.input.id);
+        if (idn != ids.end()) {
+          auto rec = coke_recipes.find({idn->second, o.input.damage});
+          if (rec == coke_recipes.end()) rec = coke_recipes.find({idn->second, 32767});
+          if (rec != coke_recipes.end() && rec->second.cook_ticks > 0) {
+            const CokeRecipe &cr = rec->second;
+            double seconds = cr.cook_ticks / 20.0;
+            o.total_ticks = cr.cook_ticks;
+            o.output = cr.output;
+            o.coke_per_second = o.cooking ? cr.output_count / seconds : 0;
+            o.creosote_mb_per_second = o.cooking ? cr.fluid_mb / seconds : 0;
+          }
+        }
+        r.chunks[i].coke_ovens.push_back(o);
+      }
+
+      if (te.id == "BaseMetaTileEntity") {
         int id = (int)te.numbers["mID"];
         for (auto &spec : gt_boilers) {
           if (spec.id != id) continue;
           GtBoiler b;
           b.x = (int)te.numbers["x"]; b.y = (int)te.numbers["y"]; b.z = (int)te.numbers["z"];
-          b.name = spec.name;
+          auto dumped = gt_machine_names.find(spec.id);
+          b.name = dumped != gt_machine_names.end() ? dumped->second : spec.name;
           b.temperature = te.numbers["mTemperature"];
           b.max_temperature = spec.max_temperature;
           b.active = te.numbers["mActive"] != 0;
@@ -625,6 +702,8 @@ void collect_containers(const path savepath, string &out) {
   map<pair<string, int>, map<pair<string, string>, int64_t>> fluids;
   vector<tuple<string, int, Boiler>> boilers;
   vector<tuple<string, int, GtBoiler>> gt;
+  vector<tuple<string, int, GtMachine>> machines;
+  vector<tuple<string, int, CokeOven>> ovens;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
     path regions = directory / "region";
@@ -640,7 +719,7 @@ void collect_containers(const path savepath, string &out) {
         r = RegionContainers{};
         r.mtime = st.st_mtime;
         r.size = st.st_size;
-        scan_region(ent.path(), r);
+        scan_region(ent.path(), r, ids);
       }
       for (auto &[i, chunk] : r.chunks) {
         auto claim = claims.owner.find({dimension, rx * 32 + (i & 31), rz * 32 + (i >> 5)});
@@ -651,6 +730,8 @@ void collect_containers(const path savepath, string &out) {
         for (auto &[k, v] : chunk.fluids) fluids[key][k] += v;
         for (auto &b : chunk.boilers) boilers.emplace_back(key.first, dimension, b);
         for (auto &b : chunk.gt_boilers) gt.emplace_back(key.first, dimension, b);
+        for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
+        for (auto &o : chunk.coke_ovens) ovens.emplace_back(key.first, dimension, o);
       }
     }
   });
@@ -742,6 +823,57 @@ void collect_containers(const path savepath, string &out) {
           esc(team).c_str(), dim, b.x, b.y, b.z, b.name.c_str(), esc(name).c_str(), esc(reg).c_str(), k.damage, n);
     }
 
+  auto machine_name = [](int id) {
+    auto n = gt_machine_names.find(id);
+    return n != gt_machine_names.end() ? n->second : "GregTech machine " + to_string(id);
+  };
+  static const struct { const char *name, *help; } machine_metrics[] = {
+    { "gt_machine_active", "1 while a GregTech machine is running a recipe" },
+    { "gt_machine_progress_ticks", "How far a GregTech machine is into its current recipe" },
+    { "gt_machine_max_progress_ticks", "How long a GregTech machine's current recipe takes, 0 when idle" },
+    { "gt_machine_eu_per_tick", "EU/t of a GregTech machine's current recipe (negative is consumption for some machines)" },
+    { "gt_machine_eu_stored", "EU stored in a GregTech machine" },
+    { "gt_machine_steam_stored", "Steam stored in a GregTech steam machine" },
+  };
+  for (int k = 0; k < (int)size(machine_metrics); k++) {
+    fmt(out, "# HELP %s %s\n# TYPE %s gauge\n", machine_metrics[k].name, machine_metrics[k].help, machine_metrics[k].name);
+    for (auto &[team, dim, m] : machines) {
+      double v = k == 0 ? m.active : k == 1 ? m.progress : k == 2 ? m.max_progress : k == 3 ? m.eu_per_tick : k == 4 ? m.eu_stored : m.steam_stored;
+      fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",mid=\"%d\"} %g\n", machine_metrics[k].name,
+          esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), m.id, v);
+    }
+  }
+  out += "# HELP gt_machine_output_items What a GregTech machine's running recipe will produce\n# TYPE gt_machine_output_items gauge\n";
+  for (auto &[team, dim, m] : machines)
+    for (auto &[k, n] : m.outputs) {
+      auto [name, reg] = item_label(k);
+      fmt(out, "gt_machine_output_items{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), esc(name).c_str(), esc(reg).c_str(), k.damage, n);
+    }
+
+  static const struct { const char *name, *help; } oven_metrics[] = {
+    { "railcraft_coke_oven_cooking", "1 while a Railcraft coke oven is cooking" },
+    { "railcraft_coke_oven_cook_ticks", "How far a Railcraft coke oven is into its batch" },
+    { "railcraft_coke_oven_total_ticks", "How long the batch takes, from the coke oven recipe for its input (NaN when unknown)" },
+    { "railcraft_coke_oven_output_per_second", "Items per second a cooking coke oven makes, from its recipe" },
+    { "railcraft_coke_oven_creosote_mb_per_second", "Creosote per second a cooking coke oven makes, from its recipe" },
+  };
+  for (int k = 0; k < (int)size(oven_metrics); k++) {
+    fmt(out, "# HELP %s %s\n# TYPE %s gauge\n", oven_metrics[k].name, oven_metrics[k].help, oven_metrics[k].name);
+    for (auto &[team, dim, o] : ovens) {
+      double v = k == 0 ? o.cooking : k == 1 ? o.cook_ticks : k == 2 ? o.total_ticks : k == 3 ? o.coke_per_second : o.creosote_mb_per_second;
+      string input = o.input.id > 0 ? item_label(o.input).first : "";
+      string output;
+      if (!o.output.empty()) {
+        auto names = item_names.find(o.output);
+        output = o.output;
+        if (names != item_names.end() && !names->second.empty()) output = names->second.begin()->second;
+      }
+      fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",input=\"%s\",output=\"%s\"} %g\n", oven_metrics[k].name,
+          esc(team).c_str(), dim, o.x, o.y, o.z, esc(input).c_str(), esc(output).c_str(), v);
+    }
+  }
+
   out += "# HELP claimed_chunks Chunks claimed with ServerUtilities, per team and dimension\n# TYPE claimed_chunks gauge\n";
   for (auto &[key, n] : claims.claimed)
     fmt(out, "claimed_chunks{team=\"%s\",dim=\"%d\"} %ld\n", esc(key.first).c_str(), key.second, n);
@@ -761,9 +893,48 @@ void collect_all(const path savepath, string &out) {
       chrono::duration<double>(chrono::steady_clock::now() - start).count());
 }
 
+// a texture-dump directory: items.json, gt_machines.json and coke_oven.json, whichever are there
+static void load_dump(const path &dir) {
+  auto load = [](const path &p, auto f) {
+    if (!exists(p)) return;
+    try {
+      json j = json::parse(readFile(p));
+      f(j);
+    } catch (const exception &e) {
+      fprintf(stderr, "failed to load %s: %s\n", p.c_str(), e.what());
+    }
+  };
+  load(dir / "items.json", [](json &j) {
+    for (auto &[reg, damages] : j.items())
+      for (auto &[damage, name] : damages.items()) item_names[reg][atoi(damage.c_str())] = name.get<string>();
+  });
+  load(dir / "gt_machines.json", [](json &j) {
+    for (auto &[id, name] : j.items()) gt_machine_names[atoi(id.c_str())] = name.get<string>();
+  });
+  load(dir / "coke_oven.json", [](json &j) {
+    for (auto &r : j) {
+      CokeRecipe c;
+      if (r.contains("output")) {
+        c.output = r["output"]["item"].get<string>();
+        c.output_damage = r["output"]["damage"].get<int>();
+        c.output_count = r["output"]["count"].get<int>();
+      }
+      if (r.contains("fluid")) {
+        c.fluid = r["fluid"].get<string>();
+        c.fluid_mb = r["fluid_mb"].get<int>();
+      }
+      c.cook_ticks = r["cook_ticks"].get<int>();
+      coke_recipes[{r["input"]["item"].get<string>(), r["input"]["damage"].get<int>()}] = c;
+    }
+  });
+  printf("loaded %zu item names, %zu GregTech machines, %zu coke oven recipes from %s\n",
+         item_names.size(), gt_machine_names.size(), coke_recipes.size(), dir.c_str());
+}
+
 static void usage(const char *argv0) {
-  printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>] [-n <items.json>]\n"
+  printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>] [-n <items.json>] [-d <texture-dump dir>]\n"
          "  -n  texture-dump's items.json, gives container_items real names (\"Iron Ingot\")\n"
+         "  -d  a texture-dump directory: items.json, gt_machines.json, coke_oven.json\n"
          "  -l  serve prometheus metrics over http (default :9150)\n"
          "  -o  write a node_exporter textfile every 10s. with -o alone there is no http server,\n"
          "      with both -o and -l it does both\n", argv0);
@@ -776,8 +947,11 @@ int main(int argc, char **argv) {
   int port = 9150;
   bool listen = false;
   int opt;
-  while ((opt = getopt(argc, argv, "p:o:l:n:h")) != -1) {
+  while ((opt = getopt(argc, argv, "p:o:l:n:d:h")) != -1) {
     switch (opt) {
+    case 'd':
+      load_dump(optarg);
+      break;
     case 'n':
       try {
         // keep the document alive, items() only refers into it
