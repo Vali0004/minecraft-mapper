@@ -300,9 +300,10 @@ void collect_players(const path savepath, string &out) {
 
 // containers
 //
-// item stacks in tile entity inventories: chests, barrels, furnaces, machine slots ("Items": id, Damage,
-// Count), Storage Drawers ("Slots": Item, Meta, Count) and Draconic Evolution's placed items (one compound
-// per stack, "Item0", "Item1"...: id, Damage, Count). only chunks claimed with ServerUtilities count,
+// item stacks in tile entity inventories: any list right under the tile entity whose entries carry an item
+// (chests' "Items", GregTech's "Inventory", Railcraft's "inv" and "invStructure"...: id, Damage, Count),
+// Storage Drawers ("Slots": Item, Meta, Count) and Draconic Evolution's placed items (one compound per
+// stack, "Item0", "Item1"...: id, Damage, Count). only chunks claimed with ServerUtilities count,
 // so dungeon and village loot stays out, summed per team, dimension and item. a region file is only parsed
 // again when it changed on disk
 
@@ -320,6 +321,8 @@ struct Boiler {
   double heat, max_heat, steam_per_tick;
   bool burning;
   int64_t water, steam;
+  map<ItemKey, int64_t> fuel_items;  // the firebox inventory: solid fuel waiting, a liquid firebox's containers
+  map<string, int64_t> fuel_fluids;  // a liquid firebox's fuel tank (creosote, oil...)
 };
 
 // GregTech single block boilers, from GT 5.09.51's MetaTileEntityIDs and MTEBoiler: every 10 ticks, while
@@ -341,6 +344,7 @@ struct GtBoiler {
   double temperature, max_temperature, steam_per_second;  // NaN steam_per_second: can't be worked out (solar)
   bool active;
   int64_t water, steam;
+  map<ItemKey, int64_t> fuel_items;  // its inventory: fuel waiting, and ash
 };
 
 struct ChunkContainers {
@@ -371,7 +375,7 @@ struct FluidParse {
 
 struct TileParse {
   string id;
-  map<int, StackParse> stacks;  // by "Items/<i>" or "Slots/<i>", slots offset to keep them apart
+  map<string, StackParse> stacks;  // by "<list>/<i>" or "Item<i>"
   // any compound holding FluidName and Amount, at any depth: Railcraft "tanks/<i>", GT "mFluid", a certus
   // quartz tank's root, TConstruct "Liquids/<i>"... keyed by the compound's path inside the tile entity
   map<string, FluidParse> fluids;
@@ -382,21 +386,34 @@ struct ChunkParse {
   map<int, TileParse> tiles;
 };
 
-// "/Level/TileEntities/<n>/Items/<i>/<field>", ".../Slots/<i>/<field>" or ".../Item<i>/<field>", the stack and its field
+// "/Level/TileEntities/<n>/<list>/<i>/<field>" or ".../Item<i>/<field>", the stack and its field. only fields
+// directly in the entry count, an item's own NBT ("<list>/<i>/tag/...", a backpack's contents) doesn't
 static StackParse *stack_field(ChunkParse *c, const string &key, const char *&field) {
   static const char prefix[] = "/Level/TileEntities/";
   if (key.compare(0, sizeof(prefix) - 1, prefix) != 0) return nullptr;
   char *end;
   int te = strtol(key.c_str() + sizeof(prefix) - 1, &end, 10);
-  int offset;
-  if (!strncmp(end, "/Items/", 7)) { end += 7; offset = 0; }
-  else if (!strncmp(end, "/Slots/", 7)) { end += 7; offset = 1 << 20; }
-  else if (!strncmp(end, "/Item", 5) && isdigit((unsigned char)end[5])) { end += 5; offset = 2 << 20; }
-  else return nullptr;
-  int slot = strtol(end, &end, 10);
   if (*end != '/') return nullptr;
-  field = end + 1;
-  return &c->tiles[te].stacks[offset + slot];
+  const char *name = end + 1;
+  const char *slash = strchr(name, '/');
+  if (!slash) return nullptr;
+  string stack;
+  if (!strncmp(name, "Item", 4) && isdigit((unsigned char)name[4])) {
+    // Item<i>/<field>
+    for (const char *d = name + 4; d < slash; d++) if (!isdigit((unsigned char)*d)) return nullptr;
+    stack.assign(name, slash - name);
+    field = slash + 1;
+  } else {
+    // <list>/<i>/<field>
+    const char *idx = slash + 1;
+    char *after;
+    strtol(idx, &after, 10);
+    if (after == idx || *after != '/') return nullptr;
+    stack.assign(name, after - name);
+    field = after + 1;
+  }
+  if (strchr(field, '/')) return nullptr;
+  return &c->tiles[te].stacks[stack];
 }
 
 // "/Level/TileEntities/<n>/<rest>" -> the tile entity and <rest>
@@ -508,6 +525,8 @@ static void scan_region(const path &p, RegionContainers &r) {
           b.active = te.numbers["mActive"] != 0;
           b.water = te.fluids.count("mFluid") && te.fluids["mFluid"].name == "water" ? te.fluids["mFluid"].amount : 0;
           b.steam = te.fluids.count("mSteam") ? te.fluids["mSteam"].amount : 0;
+          for (auto &[slot, st] : te.stacks)
+            if (st.id > 0 && st.count > 0) b.fuel_items[{st.id, st.damage}] += st.count;
           if (spec.steam_per_second < 0) b.steam_per_second = NAN;
           else b.steam_per_second = b.temperature > 100 && b.water > 0 ? spec.steam_per_second : 0;
           r.chunks[i].gt_boilers.push_back(b);
@@ -530,7 +549,10 @@ static void scan_region(const path &p, RegionContainers &r) {
         for (auto &[where, f] : te.fluids) {
           if (f.name == "water") b.water += f.amount;
           else if (f.name == "steam") b.steam += f.amount;
+          else if (!f.name.empty() && f.amount > 0) b.fuel_fluids[f.name] += f.amount;
         }
+        for (auto &[slot, st] : te.stacks)
+          if (st.id > 0 && st.count > 0) b.fuel_items[{st.id, st.damage}] += st.count;
         double water_per_cycle = b.heat >= 100 ? b.tanks * b.heat / 500.0 : 0;
         b.steam_per_tick = 160.0 * min(water_per_cycle, (double)b.water) / spec.ticks_per_cycle;
         r.chunks[i].boilers.push_back(b);
@@ -633,18 +655,24 @@ void collect_containers(const path savepath, string &out) {
     }
   });
 
+  // display name and registry name of an item
+  auto item_label = [&](const ItemKey &k) {
+    auto idn = ids.find(k.id);
+    string reg = idn != ids.end() ? idn->second : to_string(k.id);
+    string name = reg + ":" + to_string(k.damage);
+    auto names = item_names.find(reg);
+    if (names != item_names.end()) {
+      auto n = names->second.find(k.damage);
+      if (n != names->second.end()) name = n->second;
+    }
+    return pair<string, string>{name, reg};
+  };
+
   out += "# HELP container_items Items stored in tile entity inventories (chests, drawers, machines) in claimed chunks, per team and dimension\n# TYPE container_items gauge\n";
   for (auto &[key, m] : items) {
     auto &[team, dim] = key;
     for (auto &[k, count] : m) {
-      auto idn = ids.find(k.id);
-      string reg = idn != ids.end() ? idn->second : to_string(k.id);
-      string name = reg + ":" + to_string(k.damage);
-      auto names = item_names.find(reg);
-      if (names != item_names.end()) {
-        auto n = names->second.find(k.damage);
-        if (n != names->second.end()) name = n->second;
-      }
+      auto [name, reg] = item_label(k);
       fmt(out, "container_items{team=\"%s\",dim=\"%d\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
           esc(team).c_str(), dim, esc(name).c_str(), esc(reg).c_str(), k.damage, count);
     }
@@ -693,6 +721,26 @@ void collect_containers(const path savepath, string &out) {
           esc(team).c_str(), dim, b.x, b.y, b.z, b.name.c_str(), v);
     }
   }
+
+  out += "# HELP railcraft_boiler_fuel_items Items in a Railcraft boiler's firebox inventory: solid fuel waiting, and a liquid firebox's fluid containers\n# TYPE railcraft_boiler_fuel_items gauge\n";
+  for (auto &[team, dim, b] : boilers)
+    for (auto &[k, n] : b.fuel_items) {
+      auto [name, reg] = item_label(k);
+      fmt(out, "railcraft_boiler_fuel_items{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), dim, b.x, b.y, b.z, esc(name).c_str(), esc(reg).c_str(), k.damage, n);
+    }
+  out += "# HELP railcraft_boiler_fuel_mb Liquid fuel in a Railcraft liquid firebox's fuel tank\n# TYPE railcraft_boiler_fuel_mb gauge\n";
+  for (auto &[team, dim, b] : boilers)
+    for (auto &[fluid, mb] : b.fuel_fluids)
+      fmt(out, "railcraft_boiler_fuel_mb{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",fluid=\"%s\"} %ld\n",
+          esc(team).c_str(), dim, b.x, b.y, b.z, esc(fluid).c_str(), mb);
+  out += "# HELP gt_boiler_fuel_items Items in a GregTech boiler's inventory: fuel waiting, and its ash\n# TYPE gt_boiler_fuel_items gauge\n";
+  for (auto &[team, dim, b] : gt)
+    for (auto &[k, n] : b.fuel_items) {
+      auto [name, reg] = item_label(k);
+      fmt(out, "gt_boiler_fuel_items{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",boiler=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), dim, b.x, b.y, b.z, b.name.c_str(), esc(name).c_str(), esc(reg).c_str(), k.damage, n);
+    }
 
   out += "# HELP claimed_chunks Chunks claimed with ServerUtilities, per team and dimension\n# TYPE claimed_chunks gauge\n";
   for (auto &[key, n] : claims.claimed)

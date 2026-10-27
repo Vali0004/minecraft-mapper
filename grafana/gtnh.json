@@ -4496,7 +4496,7 @@
       "gridPos": {
         "x": 0,
         "y": 153,
-        "w": 24,
+        "w": 12,
         "h": 7
       },
       "targets": [
@@ -4549,6 +4549,85 @@
           "mode": "multi",
           "sort": "desc"
         }
+      }
+    },
+    {
+      "id": 69,
+      "type": "table",
+      "title": "Boiler Fuel",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 153,
+        "w": 12,
+        "h": 7
+      },
+      "description": "Items in each boiler's inventory (fuel waiting, GregTech ash, a Railcraft liquid firebox's containers) and liquid firebox fuel tanks",
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum by (item, x, y, z) (railcraft_boiler_fuel_items{alias=\"$alias\",team=~\"$team\"}) or sum by (item, x, y, z, boiler) (gt_boiler_fuel_items{alias=\"$alias\",team=~\"$team\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum by (fluid, x, y, z) (railcraft_boiler_fuel_mb{alias=\"$alias\",team=~\"$team\"})",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "item": "Item",
+              "fluid": "Fluid (mB)",
+              "boiler": "Boiler",
+              "x": "X",
+              "y": "Y",
+              "z": "Z",
+              "Value #A": "Items",
+              "Value #B": "mB"
+            },
+            "indexByName": {
+              "boiler": 0,
+              "x": 1,
+              "y": 2,
+              "z": 3,
+              "item": 4,
+              "Value #A": 5,
+              "fluid": 6,
+              "Value #B": 7
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
       }
     }
   ],
