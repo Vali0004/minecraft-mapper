@@ -15,6 +15,8 @@ struct nbt_callbacks_s {
   void (*tag8)(const nbt_callbacks *, const std::string key, const std::string value);
   // floats and doubles (tags 5 and 6), both as a double
   void (*tagf)(const nbt_callbacks *, const std::string key, double value);
+  // after each compound child and list element: how many bytes it took serialized, its own header included
+  void (*span)(const nbt_callbacks *, const std::string key, int bytes);
   void *state;
 };
 

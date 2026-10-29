@@ -18,7 +18,9 @@
 #include <cmath>
 #include <cstdarg>
 #include <map>
+#include <functional>
 #include <mutex>
+#include <set>
 #include <regex>
 #include <tuple>
 #include <nlohmann/json.hpp>
@@ -426,11 +428,15 @@ struct ChunkContainers {
   vector<GtMiner> miners;
   vector<Casting> castings;
   vector<CokeOven> coke_ovens;
+  vector<string> backpacks;  // Backpack mod UIDs in this chunk's containers, read at scrape time
+  struct Size { int x, y, z; string type; int64_t bytes; };
+  vector<Size> sizes;  // item NBT size of each container in it
 };
 
 struct RegionContainers {
   int64_t mtime = 0, size = -1;
   map<int, ChunkContainers> chunks;  // by index in the region, x + z * 32
+  map<int, pair<int64_t, int64_t>> chunk_bytes;  // every chunk: (compressed, uncompressed) bytes
 };
 
 static mutex container_lock;
@@ -439,6 +445,7 @@ static map<string, RegionContainers> container_cache;
 struct StackParse {
   int id = -1, damage = 0, slot = -1;
   int64_t count = 0;
+  string id_name;  // an id saved as a registry name (OpenBlocks' /dev/null), resolved after the parse
 };
 
 struct FluidParse {
@@ -450,6 +457,11 @@ struct TileParse {
   string id;
   map<string, StackParse> stacks;  // by "<list>/<i>" or "Item<i>"
   map<string, StackParse> outputs;  // GregTech's mOutputItem<i>: what the running recipe will make, not stored
+  // stacks inside an item's own NBT ("<list>/<i>/tag/..."): what a backpack, /dev/null or toolbox in here holds,
+  // keyed by the path of the compound holding id and Count
+  map<string, StackParse> nested;
+  vector<string> backpacks;  // Backpack mod UIDs, its contents live in backpacks/backpacks/<UID>.dat
+  int64_t item_bytes = 0;  // serialized size of its item stacks, from the parser's spans
   // any compound holding FluidName and Amount, at any depth: Railcraft "tanks/<i>", GT "mFluid", a certus
   // quartz tank's root, TConstruct "Liquids/<i>"... keyed by the compound's path inside the tile entity
   map<string, FluidParse> fluids;
@@ -560,8 +572,47 @@ static void tile_number(const nbt_callbacks *cb, const string &key, double v) {
 
 static void tagf_tile(const nbt_callbacks *cb, const string key, double v) { tile_number(cb, key, v); }
 
+// the bytes of each stored stack ("<list>/<i>" or "Item<i>" right under the tile entity), summed per tile entity
+static void span_tile(const nbt_callbacks *cb, const string key, int bytes) {
+  const char *rest;
+  TileParse *te = tile_field((ChunkParse *)cb->state, key, rest);
+  if (!te) return;
+  const char *slash = strchr(rest, '/');
+  bool stack;
+  if (!slash) stack = !strncmp(rest, "Item", 4) && isdigit((unsigned char)rest[4]);
+  else {
+    // <list>/<i> with nothing after the index
+    char *end;
+    strtol(slash + 1, &end, 10);
+    stack = end != slash + 1 && *end == 0;
+  }
+  if (!stack) return;
+  // only stacks that really are items, the stack's fields were seen before its span
+  auto st = te->stacks.find(rest);
+  if (st != te->stacks.end() && st->second.id > 0) te->item_bytes += bytes;
+}
+
+// a field of a stack inside an item's NBT: "<...>/tag/<...>/<field>", the stack is everything before the field
+static StackParse *nested_field(ChunkParse *c, const string &key, const char *&field) {
+  const char *rest;
+  TileParse *te = tile_field(c, key, rest);
+  if (!te || !strstr(rest, "/tag/")) return nullptr;
+  const char *slash = strrchr(rest, '/');
+  field = slash + 1;
+  return &te->nested[string(rest, slash - rest)];
+}
+
 static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) {
   tile_number(cb, key, (double)v);
+  {
+    const char *field;
+    if (StackParse *st = nested_field((ChunkParse *)cb->state, key, field)) {
+      if (!strcmp(field, "id")) st->id = v;
+      else if (!strcmp(field, "Damage")) st->damage = v;
+      else if (!strcmp(field, "Count")) st->count = v;
+      return;
+    }
+  }
   const char *field;
   StackParse *st = stack_field((ChunkParse *)cb->state, key, field);
   if (!st) return;
@@ -588,6 +639,11 @@ static void tag8_tile(const nbt_callbacks *cb, const string key, const string v)
   if (!te) return;
   if (!strcmp(rest, "id")) te->id = v;
   if (FluidParse *f = fluid_field(te, rest, "FluidName")) f->name = v;
+  if (strstr(rest, "/tag/")) {
+    const char *slash = strrchr(rest, '/');
+    if (!strcmp(slash + 1, "id")) te->nested[string(rest, slash - rest)].id_name = v;
+    else if (!strcmp(slash + 1, "backpack-UID")) te->backpacks.push_back(v);
+  }
 }
 
 // Railcraft boilers, from Railcraft 9.16's TileBoiler.patterns (the "pattern" a boiler saves indexes it) and
@@ -598,7 +654,8 @@ static const struct { int width, height, ticks_per_cycle; const char *pressure; 
   { 3, 4, 16, "low" }, { 3, 3, 16, "low" }, { 3, 2, 16, "low" }, { 2, 3, 16, "low" }, { 2, 2, 16, "low" }, { 1, 1, 16, "low" },
 };
 
-static void scan_region(const path &p, RegionContainers &r, const map<int, string> &ids, const MinerBlocks &mb) {
+static void scan_region(const path &p, RegionContainers &r, const map<int, string> &ids, const map<string, int> &id_of,
+                        const MinerBlocks &mb) {
   string data = readFile(p);
   if (data.size() < 8192) return;
   const uint8_t *d = (const uint8_t *)data.data();
@@ -612,6 +669,7 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
     int got;
     while ((got = decompress(d + off + 5, len - 1, buf.data(), buf.size())) < 0 && buf.size() < (64u << 20)) buf.resize(buf.size() * 2);
     if (got <= 0) continue;
+    r.chunk_bytes[i] = {len - 1, got};
 
     ChunkParse chunk;
     nbt_callbacks cb = {};
@@ -622,6 +680,7 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
     cb.tag3 = tag3_stack;
     cb.tag8 = tag8_tile;
     cb.tagf = tagf_tile;
+    cb.span = span_tile;
     parseNBT(buf.data(), got, &cb, false);
     for (auto &[n, te] : chunk.tiles) {
       bool any = false;
@@ -630,6 +689,20 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
         r.chunks[i].items[{st.id, st.damage}] += st.count;
         any = true;
       }
+      // what the items in here hold themselves (backpacks, /dev/null, toolboxes), it's stored here as much
+      for (auto &[where, st] : te.nested) {
+        int id = st.id;
+        if (id <= 0 && !st.id_name.empty()) {
+          auto f = id_of.find(st.id_name);
+          if (f != id_of.end()) id = f->second;
+        }
+        if (id <= 0 || st.count <= 0) continue;
+        r.chunks[i].items[{id, st.damage}] += st.count;
+        any = true;
+      }
+      for (auto &uid : te.backpacks) r.chunks[i].backpacks.push_back(uid);
+      if (te.item_bytes > 0)
+        r.chunks[i].sizes.push_back({(int)te.numbers["x"], (int)te.numbers["y"], (int)te.numbers["z"], te.id, te.item_bytes});
       const string type = te.id.empty() ? "unknown" : te.id;
       for (auto &[where, f] : te.fluids) {
         if (f.name.empty() || f.amount <= 0) continue;
@@ -839,10 +912,98 @@ static Claims load_claims(const path savepath) {
   return c;
 }
 
+// walks item NBT for the items in it: every compound with an id and a Count is a stack (Forestry bags' Slots,
+// /dev/null's inventory, toolboxes, lunch boxes...), and its own "tag" is walked in turn, so a toolbox in a
+// backpack in a backpack is found. the Backpack mod keeps only a UID in the item, its contents are in
+// backpacks/backpacks/<UID>.dat, which is read and walked too. `seen` makes every backpack file count once,
+// a duplicated UID or a backpack ending up inside itself can't loop. inside one NBT tree the depth is bounded
+// by Minecraft's own NBT limit (512), through backpack files it's capped at max_item_depth
+static const int max_item_depth = 32;
+
+// 1.7.10's frame decoder reads a packet length as a 3 byte varint, so no packet can be bigger than this. a
+// container's items all go in one window packet when it's opened, so item NBT piling up towards it (deeply
+// nested backpacks, book banning) gets players kicked, or worse
+static const int64_t packet_limit_bytes = (1 << 21) - 1;
+
+// serialized size of a tag's payload, as Minecraft writes it (CompressedStreamTools, before gzip)
+static int64_t nbt_payload_size(const NbtTag &t) {
+  switch (t.type) {
+  case 1: return 1;
+  case 2: return 2;
+  case 3: case 5: return 4;
+  case 4: case 6: return 8;
+  case 7: return 4 + (int64_t)t.list.size();
+  case 8: return 2 + (int64_t)t.s.size();
+  case 9: {
+    int64_t n = 1 + 4;
+    for (auto &e : t.list) n += nbt_payload_size(e);
+    return n;
+  }
+  case 10: {
+    int64_t n = 1;  // end tag
+    for (auto &[k, v] : t.compound) n += 1 + 2 + (int64_t)k.size() + nbt_payload_size(v);
+    return n;
+  }
+  case 11: return 4 + 4 * (int64_t)t.list.size();
+  case 12: return 4 + 8 * (int64_t)t.list.size();
+  }
+  return 0;
+}
+
+struct ItemWalk {
+  const path &savepath;
+  const map<string, int> &id_of;
+  set<string> seen;
+  // called for each stack with the holder it's in, returns the holder name for what that stack holds itself
+  function<string(int id, int damage, int64_t count, const string &holder)> on_stack;
+  map<string, int64_t> backpack_bytes = {};  // UID -> its file's NBT size, what opening it sends
+
+  int stack_id(const NbtTag &st) const {
+    const NbtTag *id = st.get("id");
+    if (!id) return -1;
+    if (id->type == 8) {  // saved as a registry name (OpenBlocks' /dev/null)
+      auto f = id_of.find(id->s);
+      return f != id_of.end() ? f->second : -1;
+    }
+    return (int)id->asNum();
+  }
+
+  void walk(const NbtTag &t, const string &holder, int depth) {
+    if (depth > max_item_depth) return;
+    if (t.type == 9) {
+      for (auto &e : t.list) walk(e, holder, depth);
+      return;
+    }
+    if (t.type != 10) return;
+    if (t.get("id") && t.get("Count")) {
+      int id = stack_id(t);
+      int64_t count = (int64_t)t.num("Count");
+      if (id <= 0 || count <= 0) return;
+      string inner = on_stack(id, (int)t.num("Damage"), count, holder);
+      if (const NbtTag *tag = t.get("tag")) walk(*tag, inner, depth + 1);
+      return;
+    }
+    if (const NbtTag *uid = t.get("backpack-UID"); uid && uid->type == 8 && uid->s.find('/') == string::npos && seen.insert(uid->s).second) {
+      path f = savepath / "backpacks" / "backpacks" / (uid->s + ".dat");
+      if (exists(f)) {
+        try {
+          NbtTag bp = loadGzipNbt(f);
+          backpack_bytes[uid->s] = nbt_payload_size(bp);
+          walk(bp, holder, depth + 1);
+        } catch (const exception &e) {
+          fprintf(stderr, "failed to read %s: %s\n", f.c_str(), e.what());
+        }
+      }
+    }
+    for (auto &[k, v] : t.compound) walk(v, holder, depth);
+  }
+};
+
 void collect_containers(const path savepath, string &out) {
   // numeric ids are per world, level.dat has the registry ("\x02" items, "\x01" blocks)
   map<int, string> ids;
   MinerBlocks mb;
+  map<string, int> id_of;  // registry name -> id, for ids saved as names
   try {
     NbtTag level = loadGzipNbt(savepath / "level.dat");
     if (const NbtTag *fml = level.get("FML"))
@@ -874,6 +1035,12 @@ void collect_containers(const path savepath, string &out) {
   vector<tuple<string, int, GtMachine>> machines;
   vector<tuple<string, int, GtMiner>> miners;
   vector<tuple<string, int, Casting>> castings;
+  set<string> chest_backpacks_seen;  // a backpack file counts once even if its UID turns up twice
+  vector<tuple<string, int, ChunkContainers::Size>> sizes;
+  // chunk sizes: every claimed chunk on its own, and per dimension totals and maximum over all chunks
+  vector<tuple<string, int, int, int, int64_t, int64_t>> claimed_chunk_bytes;  // team, dim, x, z, compressed, uncompressed
+  map<int, int64_t> dim_compressed, dim_uncompressed, dim_chunks, dim_max_compressed, dim_max_uncompressed;
+  map<string, int64_t> backpack_bytes;
   vector<tuple<string, int, CokeOven>> ovens;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
@@ -890,7 +1057,19 @@ void collect_containers(const path savepath, string &out) {
         r = RegionContainers{};
         r.mtime = st.st_mtime;
         r.size = st.st_size;
-        scan_region(ent.path(), r, ids, mb);
+        if (id_of.empty())
+          for (auto &[id, name] : ids) id_of.emplace(name, id);
+        scan_region(ent.path(), r, ids, id_of, mb);
+      }
+      for (auto &[i, b] : r.chunk_bytes) {
+        dim_compressed[dimension] += b.first;
+        dim_uncompressed[dimension] += b.second;
+        dim_chunks[dimension]++;
+        dim_max_compressed[dimension] = max(dim_max_compressed[dimension], b.first);
+        dim_max_uncompressed[dimension] = max(dim_max_uncompressed[dimension], b.second);
+        int cx = rx * 32 + (i & 31), cz = rz * 32 + (i >> 5);
+        auto claim = claims.owner.find({dimension, cx, cz});
+        if (claim != claims.owner.end()) claimed_chunk_bytes.emplace_back(claim->second, dimension, cx, cz, b.first, b.second);
       }
       for (auto &[i, chunk] : r.chunks) {
         auto claim = claims.owner.find({dimension, rx * 32 + (i & 31), rz * 32 + (i >> 5)});
@@ -904,6 +1083,26 @@ void collect_containers(const path savepath, string &out) {
         for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
         for (auto &m : chunk.miners) miners.emplace_back(key.first, dimension, m);
         for (auto &c : chunk.castings) castings.emplace_back(key.first, dimension, c);
+        for (auto &z : chunk.sizes) sizes.emplace_back(key.first, dimension, z);
+        // a Backpack mod backpack in a chest: its contents are in its own file, read every scrape since they
+        // change without the chest's chunk being saved. walked all the way down, backpacks in it included
+        if (!chunk.backpacks.empty()) {
+          auto &into = items[key];
+          ItemWalk w{savepath, id_of, {}, [&](int id, int damage, int64_t count, const string &) {
+            into[{id, damage}] += count;
+            return string();
+          }};
+          w.seen = chest_backpacks_seen;
+          for (auto &uid : chunk.backpacks) {
+            NbtTag holder;
+            holder.type = 10;
+            holder.compound["backpack-UID"].type = 8;
+            holder.compound["backpack-UID"].s = uid;
+            w.walk(holder, "", 0);
+          }
+          chest_backpacks_seen = w.seen;
+          for (auto &[uid, b] : w.backpack_bytes) backpack_bytes[uid] = b;
+        }
         for (auto &o : chunk.coke_ovens) ovens.emplace_back(key.first, dimension, o);
       }
     }
@@ -1100,7 +1299,10 @@ void collect_containers(const path savepath, string &out) {
   // extra gear slots, labelled with the player's ServerUtilities team ("" for none)
   {
     const auto names = load_usercache(savepath);
-    map<tuple<string, string, string, ItemKey>, int64_t> held;  // (team, player, where, item) -> count
+    // (team, player, where, container, item) -> count. container is the item holding it (a backpack, /dev/null), "" when carried
+    map<tuple<string, string, string, string, ItemKey>, int64_t> held;
+    map<pair<string, string>, int64_t> inventory_bytes;  // (player, inventory|ender_chest|galacticraft) -> NBT size
+    map<string, int64_t> item_max;  // player -> their largest single item's NBT size
     path pd = savepath / "playerdata";
     if (exists(pd)) {
       for (auto &ent : directory_iterator(pd)) {
@@ -1117,30 +1319,85 @@ void collect_containers(const path savepath, string &out) {
         } catch (const exception &e) {
           continue;
         }
+        set<string> player_backpacks_seen;
         static const struct { const char *list, *where; } lists[] = {
           { "Inventory", "inventory" }, { "EnderItems", "ender_chest" }, { "ExtendedInventoryGC", "galacticraft" },
         };
         for (auto &li : lists) {
           const NbtTag *l = p.get(li.list);
           if (!l) continue;
+          // the walker counts each stack, then whatever it holds, under the name of the item holding it.
+          // the player's backpack files count once across all their slots
           for (auto &stack : l->list) {
-            int id = (int)stack.num("id", -1), count = (int)stack.num("Count");
-            if (id <= 0 || count <= 0) continue;
             string where = li.where;
             if (where == "inventory" && stack.num("Slot") >= 100) where = "armor";
-            held[{team, n->second, where, ItemKey{id, (int)stack.num("Damage")}}] += count;
+            ItemWalk w{savepath, id_of, {}, [&](int id, int damage, int64_t count, const string &holder) {
+              ItemKey k{id, damage};
+              held[{team, n->second, where, holder, k}] += count;
+              return item_label(k).first;
+            }};
+            w.seen = player_backpacks_seen;
+            w.walk(stack, "", 0);
+            player_backpacks_seen = w.seen;
+            for (auto &[uid, b] : w.backpack_bytes) backpack_bytes[uid] = b;
+            item_max[n->second] = max(item_max[n->second], nbt_payload_size(stack));
           }
+          // the inventory and the ender chest each go to the client in one window packet
+          inventory_bytes[{n->second, li.where}] = nbt_payload_size(*l);
         }
       }
     }
-    out += "# HELP player_items Items players carry, per player and where: inventory, armor, ender_chest, galacticraft (its extra gear slots)\n# TYPE player_items gauge\n";
+    out += "# HELP player_inventory_nbt_bytes Serialized size of a player's inventory, ender chest or Galacticraft slots, each is one packet to the client\n# TYPE player_inventory_nbt_bytes gauge\n";
+    for (auto &[k, b] : inventory_bytes)
+      fmt(out, "player_inventory_nbt_bytes{player=\"%s\",where=\"%s\"} %ld\n", esc(k.first).c_str(), k.second.c_str(), b);
+    out += "# HELP player_item_nbt_bytes_max A player's largest single item, with everything it holds\n# TYPE player_item_nbt_bytes_max gauge\n";
+    for (auto &[pl, b] : item_max) fmt(out, "player_item_nbt_bytes_max{player=\"%s\"} %ld\n", esc(pl).c_str(), b);
+    out += "# HELP player_items Items players carry, per player and where (inventory, armor, ender_chest, galacticraft), container is the item they're in (a backpack, /dev/null), empty when carried\n# TYPE player_items gauge\n";
     for (auto &[k, count] : held) {
-      auto &[team, player, where, item] = k;
+      auto &[team, player, where, container, item] = k;
       auto [name, reg] = item_label(item);
-      fmt(out, "player_items{team=\"%s\",player=\"%s\",where=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
-          esc(team).c_str(), esc(player).c_str(), where.c_str(), esc(name).c_str(), esc(reg).c_str(), item.damage, count);
+      fmt(out, "player_items{team=\"%s\",player=\"%s\",where=\"%s\",container=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), esc(player).c_str(), where.c_str(), esc(container).c_str(), esc(name).c_str(), esc(reg).c_str(), item.damage, count);
     }
   }
+
+  // packet size: everything a container sends when opened has to fit one packet
+  fmt(out, "# HELP minecraft_packet_limit_bytes Largest packet 1.7.10 can send (a 3 byte varint length)\n# TYPE minecraft_packet_limit_bytes gauge\nminecraft_packet_limit_bytes %ld\n",
+      packet_limit_bytes);
+  out += "# HELP container_nbt_bytes Serialized size of a container's items (sent in one packet when opened), only containers over 64 KiB\n# TYPE container_nbt_bytes gauge\n";
+  map<pair<string, int>, int64_t> size_max;
+  for (auto &[team, dim, z] : sizes) {
+    size_max[{team, dim}] = max(size_max[{team, dim}], z.bytes);
+    if (z.bytes > 65536)
+      fmt(out, "container_nbt_bytes{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",type=\"%s\"} %ld\n",
+          esc(team).c_str(), dim, z.x, z.y, z.z, esc(z.type).c_str(), z.bytes);
+  }
+  // chunk sizes, to watch bases grow. a region file keeps each chunk's length in sectors in one byte, so a
+  // chunk can't be more than 255 sectors (4 KiB each) compressed, past that it can't be saved (chunk overflow)
+  fmt(out, "# HELP minecraft_chunk_limit_bytes Largest compressed chunk a region file can hold (255 sectors of 4 KiB)\n# TYPE minecraft_chunk_limit_bytes gauge\nminecraft_chunk_limit_bytes %d\n", 255 * 4096);
+  out += "# HELP chunk_compressed_bytes A claimed chunk's size in its region file (zlib compressed)\n# TYPE chunk_compressed_bytes gauge\n";
+  for (auto &[team, dim, x, z, c, u] : claimed_chunk_bytes)
+    fmt(out, "chunk_compressed_bytes{team=\"%s\",dim=\"%d\",x=\"%d\",z=\"%d\"} %ld\n", esc(team).c_str(), dim, x, z, c);
+  out += "# HELP chunk_nbt_bytes A claimed chunk's NBT size, uncompressed\n# TYPE chunk_nbt_bytes gauge\n";
+  for (auto &[team, dim, x, z, c, u] : claimed_chunk_bytes)
+    fmt(out, "chunk_nbt_bytes{team=\"%s\",dim=\"%d\",x=\"%d\",z=\"%d\"} %ld\n", esc(team).c_str(), dim, x, z, u);
+  out += "# HELP region_chunk_bytes_total All saved chunks of a dimension together, compressed and uncompressed\n# TYPE region_chunk_bytes_total gauge\n";
+  for (auto &[dim, b] : dim_compressed) {
+    fmt(out, "region_chunk_bytes_total{dim=\"%d\",size=\"compressed\"} %ld\n", dim, b);
+    fmt(out, "region_chunk_bytes_total{dim=\"%d\",size=\"uncompressed\"} %ld\n", dim, dim_uncompressed[dim]);
+  }
+  out += "# HELP region_chunk_bytes_max A dimension's largest chunk, compressed and uncompressed\n# TYPE region_chunk_bytes_max gauge\n";
+  for (auto &[dim, b] : dim_max_compressed) {
+    fmt(out, "region_chunk_bytes_max{dim=\"%d\",size=\"compressed\"} %ld\n", dim, b);
+    fmt(out, "region_chunk_bytes_max{dim=\"%d\",size=\"uncompressed\"} %ld\n", dim, dim_max_uncompressed[dim]);
+  }
+  out += "# HELP region_chunks Saved chunks in a dimension\n# TYPE region_chunks gauge\n";
+  for (auto &[dim, n] : dim_chunks) fmt(out, "region_chunks{dim=\"%d\"} %ld\n", dim, n);
+
+  out += "# HELP backpack_nbt_bytes Serialized size of a Backpack mod backpack's contents (one packet when it's opened), in a container or carried\n# TYPE backpack_nbt_bytes gauge\n";
+  for (auto &[uid, b] : backpack_bytes) fmt(out, "backpack_nbt_bytes{uid=\"%s\"} %ld\n", esc(uid).c_str(), b);
+  out += "# HELP container_nbt_bytes_max The largest container's item NBT, per team and dimension\n# TYPE container_nbt_bytes_max gauge\n";
+  for (auto &[k, b] : size_max) fmt(out, "container_nbt_bytes_max{team=\"%s\",dim=\"%d\"} %ld\n", esc(k.first).c_str(), k.second, b);
 
   static const struct { const char *name, *help; } oven_metrics[] = {
     { "railcraft_coke_oven_cooking", "1 while a Railcraft coke oven is cooking" },

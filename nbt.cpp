@@ -121,7 +121,9 @@ void parseTag(string name_in, uint8_t tag, const uint8_t *nbt, int *pos, const n
     for (unsigned int i=0; i<elements; i++) {
       snprintf(buf, 10, "/%d", i);
       string buf2 = buf;
+      int start = *pos;
       parseTag(name_in + buf2, common_tag, nbt, pos, cb, verbose);
+      if (cb && cb->span) cb->span(cb, name_in + buf2, *pos - start);
     }
     break;
   }
@@ -132,8 +134,10 @@ void parseTag(string name_in, uint8_t tag, const uint8_t *nbt, int *pos, const n
       uint8_t b = nbt[(*pos)++];
       //printf("TAG %d\n", b);
       if (b == 0) break;
+      int start = *pos - 1;  // from its type byte
       string name = get_length_prefixed_string(nbt, pos);
       parseTag(name_in + "/" + name, b, nbt, pos, cb, verbose);
+      if (cb && cb->span) cb->span(cb, name_in + "/" + name, *pos - start);
     }
     break;
   }

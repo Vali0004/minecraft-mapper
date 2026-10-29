@@ -2192,7 +2192,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 227,
+        "y": 251,
         "w": 24,
         "h": 1
       },
@@ -2205,7 +2205,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 228,
+        "y": 252,
         "w": 6,
         "h": 4
       },
@@ -2266,7 +2266,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 6,
-        "y": 228,
+        "y": 252,
         "w": 6,
         "h": 4
       },
@@ -2327,7 +2327,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 228,
+        "y": 252,
         "w": 6,
         "h": 4
       },
@@ -2371,7 +2371,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 18,
-        "y": 228,
+        "y": 252,
         "w": 6,
         "h": 4
       },
@@ -2416,7 +2416,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 232,
+        "y": 256,
         "w": 12,
         "h": 9
       },
@@ -2486,7 +2486,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 232,
+        "y": 256,
         "w": 12,
         "h": 9
       },
@@ -2540,7 +2540,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 241,
+        "y": 265,
         "w": 12,
         "h": 9
       },
@@ -2602,7 +2602,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 241,
+        "y": 265,
         "w": 12,
         "h": 9
       },
@@ -2656,7 +2656,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 250,
+        "y": 274,
         "w": 8,
         "h": 8
       },
@@ -2710,7 +2710,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 250,
+        "y": 274,
         "w": 8,
         "h": 8
       },
@@ -2764,7 +2764,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 250,
+        "y": 274,
         "w": 8,
         "h": 8
       },
@@ -2825,7 +2825,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 258,
+        "y": 282,
         "w": 24,
         "h": 1
       },
@@ -2838,7 +2838,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -2900,7 +2900,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 4,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -2961,7 +2961,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -3005,7 +3005,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -3049,7 +3049,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -3093,7 +3093,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 20,
-        "y": 259,
+        "y": 283,
         "w": 4,
         "h": 4
       },
@@ -3138,7 +3138,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 263,
+        "y": 287,
         "w": 12,
         "h": 9
       },
@@ -3201,7 +3201,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 263,
+        "y": 287,
         "w": 12,
         "h": 9
       },
@@ -3258,7 +3258,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 272,
+        "y": 296,
         "w": 12,
         "h": 9
       },
@@ -3329,7 +3329,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 272,
+        "y": 296,
         "w": 12,
         "h": 9
       },
@@ -3392,7 +3392,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 281,
+        "y": 305,
         "w": 8,
         "h": 8
       },
@@ -3576,7 +3576,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 281,
+        "y": 305,
         "w": 8,
         "h": 8
       },
@@ -3639,7 +3639,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 281,
+        "y": 305,
         "w": 8,
         "h": 8
       },
@@ -3702,7 +3702,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 289,
+        "y": 313,
         "w": 12,
         "h": 9
       },
@@ -3759,7 +3759,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 289,
+        "y": 313,
         "w": 12,
         "h": 9
       },
@@ -3815,7 +3815,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 298,
+        "y": 322,
         "w": 12,
         "h": 10
       },
@@ -3871,7 +3871,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 298,
+        "y": 322,
         "w": 12,
         "h": 10
       },
@@ -3928,7 +3928,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 308,
+        "y": 332,
         "w": 12,
         "h": 9
       },
@@ -4007,7 +4007,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 308,
+        "y": 332,
         "w": 12,
         "h": 9
       },
@@ -5766,12 +5766,12 @@
         "w": 16,
         "h": 11
       },
-      "description": "Where: inventory, armor, ender_chest, galacticraft. Team is the player's ServerUtilities team, empty when they're in none. Ignores the Team dropdown, since most players are in no team",
+      "description": "Where: inventory, armor, ender_chest, galacticraft. In is the item it's stored in (a backpack, /dev/null, a lunch box), empty when carried directly. Team is the player's ServerUtilities team, empty when they're in none. Ignores the Team dropdown, since most players are in no team",
       "targets": [
         {
           "datasource": "prometheus",
           "editorMode": "code",
-          "expr": "sum by (player, team, where, item) (player_items{alias=\"$alias\"})",
+          "expr": "sum by (player, team, where, container, item) (player_items{alias=\"$alias\"})",
           "refId": "A",
           "instant": true,
           "range": false,
@@ -5790,14 +5790,16 @@
               "team": "Team",
               "where": "Where",
               "item": "Item",
-              "Value": "Count"
+              "Value": "Count",
+              "container": "In"
             },
             "indexByName": {
               "player": 0,
               "team": 1,
               "where": 2,
-              "item": 3,
-              "Value": 4
+              "container": 3,
+              "item": 4,
+              "Value": 5
             }
           }
         }
@@ -5941,6 +5943,517 @@
             ]
           }
         ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 90,
+      "type": "row",
+      "title": "Sizes and Limits",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 227,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 91,
+      "type": "stat",
+      "title": "Biggest Packet vs Limit",
+      "description": "The largest of: a player's inventory, a backpack's contents, a container's items, against the 2 MiB packet limit. Each is sent in one packet when opened, too big kicks players (orange at 50%, red at 80%)",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 228,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "max(label_replace(max(player_inventory_nbt_bytes{alias=\"$alias\"}), \"what\", \"inventory\", \"\", \"\") or label_replace(max(backpack_nbt_bytes{alias=\"$alias\"}), \"what\", \"backpack\", \"\", \"\") or label_replace(max(container_nbt_bytes_max{alias=\"$alias\"}), \"what\", \"container\", \"\", \"\")) / scalar(minecraft_packet_limit_bytes{alias=\"$alias\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              },
+              {
+                "value": 0.5,
+                "color": "orange"
+              },
+              {
+                "value": 0.8,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 92,
+      "type": "stat",
+      "title": "Biggest Chunk vs Limit",
+      "description": "The largest compressed chunk against what a region file can hold (255 sectors of 4 KiB), past it the chunk can't be saved",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 6,
+        "y": 228,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "max(region_chunk_bytes_max{alias=\"$alias\",size=\"compressed\"}) / scalar(minecraft_chunk_limit_bytes{alias=\"$alias\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              },
+              {
+                "value": 0.5,
+                "color": "orange"
+              },
+              {
+                "value": 0.8,
+                "color": "red"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 93,
+      "type": "stat",
+      "title": "World Size, Compressed",
+      "description": "All saved chunks in region files",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 228,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum(region_chunk_bytes_total{alias=\"$alias\",size=\"compressed\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 94,
+      "type": "stat",
+      "title": "World Size, Uncompressed",
+      "description": "All saved chunks as NBT",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 18,
+        "y": 228,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "sum(region_chunk_bytes_total{alias=\"$alias\",size=\"uncompressed\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "decimals": 1,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "blue"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 95,
+      "type": "timeseries",
+      "title": "Claimed Chunks, Uncompressed",
+      "description": "Each claimed chunk's NBT size, it grows as a base gets more complicated",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 232,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "chunk_nbt_bytes{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "{{team}} {{x}},{{z}} (DIM {{dim}})",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 96,
+      "type": "timeseries",
+      "title": "Claimed Chunks, Compressed",
+      "description": "Each claimed chunk's size in its region file, against the 1,044,480 byte limit",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 232,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "chunk_compressed_bytes{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "{{team}} {{x}},{{z}} (DIM {{dim}})",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "minecraft_chunk_limit_bytes{alias=\"$alias\"}",
+          "legendFormat": "region file limit",
+          "refId": "B",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 97,
+      "type": "timeseries",
+      "title": "World Size per Dimension",
+      "description": "",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 242,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "region_chunk_bytes_total{alias=\"$alias\",size=\"compressed\"}",
+          "legendFormat": "DIM {{dim}} compressed",
+          "refId": "A",
+          "range": true
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "region_chunk_bytes_total{alias=\"$alias\",size=\"uncompressed\"}",
+          "legendFormat": "DIM {{dim}} uncompressed",
+          "refId": "B",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "stepAfter"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 98,
+      "type": "table",
+      "title": "Biggest Inventories and Backpacks",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 242,
+        "w": 12,
+        "h": 9
+      },
+      "description": "Serialized NBT of what each opens in one packet. Bytes against the 2 MiB packet limit",
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "topk(10, player_inventory_nbt_bytes{alias=\"$alias\"})",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "topk(10, backpack_nbt_bytes{alias=\"$alias\"})",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "topk(10, container_nbt_bytes{alias=\"$alias\"})",
+          "refId": "C",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "alias": true,
+              "instance": true,
+              "job": true
+            },
+            "renameByName": {
+              "player": "Player",
+              "where": "Inventory",
+              "uid": "Backpack",
+              "team": "Team",
+              "dim": "Dim",
+              "type": "Container",
+              "Value #A": "Inventory Bytes",
+              "Value #B": "Backpack Bytes",
+              "Value #C": "Container Bytes"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": []
       },
       "options": {
         "showHeader": true,
