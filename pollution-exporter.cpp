@@ -391,6 +391,16 @@ struct GtMiner {
   int64_t pipes;  // mining pipe in its inventory, what it has left to go deeper with
 };
 
+// TConstruct casting tables and basins: the molten metal on them, the cast, and how far the casting is.
+// castingDelay counts down from maxCastingDelay once the metal is poured
+struct Casting {
+  int x, y, z;
+  string type, fluid;
+  int64_t fluid_mb;
+  double progress;  // 0..1, NaN when nothing is casting
+  ItemKey cast{-1, 0}, result{-1, 0};
+};
+
 struct GtMachine {
   int x, y, z, id;
   bool active;
@@ -414,6 +424,7 @@ struct ChunkContainers {
   vector<GtBoiler> gt_boilers;
   vector<GtMachine> gt_machines;
   vector<GtMiner> miners;
+  vector<Casting> castings;
   vector<CokeOven> coke_ovens;
 };
 
@@ -689,6 +700,26 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
         }
       }
 
+      if (te.id == "CastingTable" || te.id == "CastingBasin") {
+        Casting c;
+        c.x = (int)te.numbers["x"]; c.y = (int)te.numbers["y"]; c.z = (int)te.numbers["z"];
+        c.type = te.id == "CastingTable" ? "table" : "basin";
+        c.fluid_mb = 0;
+        if (te.fluids.count("Fluid") && te.fluids["Fluid"].amount > 0) {
+          c.fluid = te.fluids["Fluid"].name;
+          c.fluid_mb = te.fluids["Fluid"].amount;
+        }
+        double delay = te.numbers["castingDelay"], max_delay = te.numbers["maxCastingDelay"];
+        c.progress = c.fluid_mb > 0 && max_delay > 0 && delay > 0 ? 1.0 - delay / max_delay : NAN;
+        // slot 0 is the cast (tables only), slot 1 the finished piece
+        for (auto &[slot, st] : te.stacks) {
+          if (st.id <= 0 || st.count <= 0) continue;
+          if (st.slot == 0) c.cast = {st.id, st.damage};
+          else if (st.slot == 1) c.result = {st.id, st.damage};
+        }
+        r.chunks[i].castings.push_back(c);
+      }
+
       // a coke oven's master block holds the oven's state. how long a batch takes, and what it gives, comes
       // from the recipe for what's in its input slot (0)
       if (te.id == "RCCokeOvenTile" && te.numbers["master"] == 1) {
@@ -768,6 +799,7 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
 struct Claims {
   map<tuple<int, int, int>, string> owner;  // (dim, chunk x, chunk z) -> team
   map<pair<string, int>, int64_t> claimed, loaded;  // (team, dim) -> chunks
+  map<string, string> member_team;  // lowercase player name -> team, from the team's Owner and Players
 };
 
 static Claims load_claims(const path savepath) {
@@ -781,9 +813,13 @@ static Claims load_claims(const path savepath) {
       // the team's title if it has one, else whoever owns it
       if (exists(teams / ent.path().filename())) {
         NbtTag t = loadGzipNbt(teams / ent.path().filename());
-        const NbtTag *title = t.get("Title"), *owner = t.get("Owner");
+        const NbtTag *title = t.get("Title"), *owner = t.get("Owner"), *players = t.get("Players");
         if (title && !title->s.empty()) team = title->s;
         else if (owner && !owner->s.empty()) team = owner->s;
+        auto lower = [](string n) { for (char &ch : n) ch = tolower(ch); return n; };
+        if (owner && !owner->s.empty()) c.member_team[lower(owner->s)] = team;
+        if (players)
+          for (auto &[name, rank] : players->compound) c.member_team[lower(name)] = team;
       }
       NbtTag cc = loadGzipNbt(ent.path());
       const NbtTag *dims = cc.get("ClaimedChunks");
@@ -837,6 +873,7 @@ void collect_containers(const path savepath, string &out) {
   vector<tuple<string, int, GtBoiler>> gt;
   vector<tuple<string, int, GtMachine>> machines;
   vector<tuple<string, int, GtMiner>> miners;
+  vector<tuple<string, int, Casting>> castings;
   vector<tuple<string, int, CokeOven>> ovens;
   lock_guard<mutex> l(container_lock);
   for_each_dimension(savepath, [&](path directory, int dimension) -> void {
@@ -866,6 +903,7 @@ void collect_containers(const path savepath, string &out) {
         for (auto &b : chunk.gt_boilers) gt.emplace_back(key.first, dimension, b);
         for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
         for (auto &m : chunk.miners) miners.emplace_back(key.first, dimension, m);
+        for (auto &c : chunk.castings) castings.emplace_back(key.first, dimension, c);
         for (auto &o : chunk.coke_ovens) ovens.emplace_back(key.first, dimension, o);
       }
     }
@@ -880,6 +918,9 @@ void collect_containers(const path savepath, string &out) {
     if (names != item_names.end()) {
       auto n = names->second.find(k.damage);
       if (n != names->second.end()) name = n->second;
+      // tools and armor keep their wear in the damage value, an item with a single named variant is that item
+      // whatever its damage. items with several (GregTech's materials) really are something else per damage
+      else if (names->second.size() == 1) name = names->second.begin()->second;
     }
     return pair<string, string>{name, reg};
   };
@@ -1037,6 +1078,68 @@ void collect_containers(const path savepath, string &out) {
     auto &[team, dim, material, stage, steps] = k;
     fmt(out, "gt_ore_items{team=\"%s\",dim=\"%d\",material=\"%s\",stage=\"%s\",steps_to_dust=\"%d\"} %ld\n",
         esc(team).c_str(), dim, esc(material).c_str(), stage.c_str(), steps, n);
+  }
+
+  out += "# HELP tconstruct_casting_progress How far a TConstruct casting table or basin is with its casting, 0 to 1 (NaN with nothing casting)\n# TYPE tconstruct_casting_progress gauge\n";
+  for (auto &[team, dim, c] : castings) {
+    string cast = c.cast.id > 0 ? item_label(c.cast).first : "";
+    fmt(out, "tconstruct_casting_progress{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",type=\"%s\",fluid=\"%s\",cast=\"%s\"} %g\n",
+        esc(team).c_str(), dim, c.x, c.y, c.z, c.type.c_str(), esc(c.fluid).c_str(), esc(cast).c_str(), c.progress);
+  }
+  out += "# HELP tconstruct_casting_fluid_mb Molten metal poured onto a TConstruct casting table or basin\n# TYPE tconstruct_casting_fluid_mb gauge\n";
+  for (auto &[team, dim, c] : castings)
+    fmt(out, "tconstruct_casting_fluid_mb{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",type=\"%s\",fluid=\"%s\"} %ld\n",
+        esc(team).c_str(), dim, c.x, c.y, c.z, c.type.c_str(), esc(c.fluid).c_str(), c.fluid_mb);
+  out += "# HELP tconstruct_casting_result A finished piece waiting on a TConstruct casting table or basin\n# TYPE tconstruct_casting_result gauge\n";
+  for (auto &[team, dim, c] : castings)
+    if (c.result.id > 0)
+      fmt(out, "tconstruct_casting_result{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",type=\"%s\",item=\"%s\"} 1\n",
+          esc(team).c_str(), dim, c.x, c.y, c.z, c.type.c_str(), esc(item_label(c.result).first).c_str());
+
+  // player inventories, from playerdata: main inventory, armor (slots 100-103), ender chest and Galacticraft's
+  // extra gear slots, labelled with the player's ServerUtilities team ("" for none)
+  {
+    const auto names = load_usercache(savepath);
+    map<tuple<string, string, string, ItemKey>, int64_t> held;  // (team, player, where, item) -> count
+    path pd = savepath / "playerdata";
+    if (exists(pd)) {
+      for (auto &ent : directory_iterator(pd)) {
+        if (ent.path().extension() != ".dat") continue;
+        auto n = names.find(ent.path().stem().string());
+        if (n == names.end()) continue;
+        string lower = n->second;
+        for (char &ch : lower) ch = tolower(ch);
+        auto t = claims.member_team.find(lower);
+        string team = t != claims.member_team.end() ? t->second : "";
+        NbtTag p;
+        try {
+          p = loadGzipNbt(ent.path());
+        } catch (const exception &e) {
+          continue;
+        }
+        static const struct { const char *list, *where; } lists[] = {
+          { "Inventory", "inventory" }, { "EnderItems", "ender_chest" }, { "ExtendedInventoryGC", "galacticraft" },
+        };
+        for (auto &li : lists) {
+          const NbtTag *l = p.get(li.list);
+          if (!l) continue;
+          for (auto &stack : l->list) {
+            int id = (int)stack.num("id", -1), count = (int)stack.num("Count");
+            if (id <= 0 || count <= 0) continue;
+            string where = li.where;
+            if (where == "inventory" && stack.num("Slot") >= 100) where = "armor";
+            held[{team, n->second, where, ItemKey{id, (int)stack.num("Damage")}}] += count;
+          }
+        }
+      }
+    }
+    out += "# HELP player_items Items players carry, per player and where: inventory, armor, ender_chest, galacticraft (its extra gear slots)\n# TYPE player_items gauge\n";
+    for (auto &[k, count] : held) {
+      auto &[team, player, where, item] = k;
+      auto [name, reg] = item_label(item);
+      fmt(out, "player_items{team=\"%s\",player=\"%s\",where=\"%s\",item=\"%s\",id=\"%s\",damage=\"%d\"} %ld\n",
+          esc(team).c_str(), esc(player).c_str(), where.c_str(), esc(name).c_str(), esc(reg).c_str(), item.damage, count);
+    }
   }
 
   static const struct { const char *name, *help; } oven_metrics[] = {
