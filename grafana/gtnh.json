@@ -2192,7 +2192,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 251,
+        "y": 260,
         "w": 24,
         "h": 1
       },
@@ -2205,7 +2205,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 252,
+        "y": 261,
         "w": 6,
         "h": 4
       },
@@ -2266,7 +2266,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 6,
-        "y": 252,
+        "y": 261,
         "w": 6,
         "h": 4
       },
@@ -2327,7 +2327,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 252,
+        "y": 261,
         "w": 6,
         "h": 4
       },
@@ -2371,7 +2371,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 18,
-        "y": 252,
+        "y": 261,
         "w": 6,
         "h": 4
       },
@@ -2416,7 +2416,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 256,
+        "y": 265,
         "w": 12,
         "h": 9
       },
@@ -2486,7 +2486,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 256,
+        "y": 265,
         "w": 12,
         "h": 9
       },
@@ -2540,7 +2540,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 265,
+        "y": 274,
         "w": 12,
         "h": 9
       },
@@ -2602,7 +2602,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 265,
+        "y": 274,
         "w": 12,
         "h": 9
       },
@@ -2656,7 +2656,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 274,
+        "y": 283,
         "w": 8,
         "h": 8
       },
@@ -2710,7 +2710,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 274,
+        "y": 283,
         "w": 8,
         "h": 8
       },
@@ -2764,7 +2764,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 274,
+        "y": 283,
         "w": 8,
         "h": 8
       },
@@ -2825,7 +2825,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 282,
+        "y": 291,
         "w": 24,
         "h": 1
       },
@@ -2838,7 +2838,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -2900,7 +2900,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 4,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -2961,7 +2961,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -3005,7 +3005,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -3049,7 +3049,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -3093,7 +3093,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 20,
-        "y": 283,
+        "y": 292,
         "w": 4,
         "h": 4
       },
@@ -3138,7 +3138,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 287,
+        "y": 296,
         "w": 12,
         "h": 9
       },
@@ -3201,7 +3201,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 287,
+        "y": 296,
         "w": 12,
         "h": 9
       },
@@ -3258,7 +3258,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 296,
+        "y": 305,
         "w": 12,
         "h": 9
       },
@@ -3329,7 +3329,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 296,
+        "y": 305,
         "w": 12,
         "h": 9
       },
@@ -3392,7 +3392,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 305,
+        "y": 314,
         "w": 8,
         "h": 8
       },
@@ -3576,7 +3576,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 305,
+        "y": 314,
         "w": 8,
         "h": 8
       },
@@ -3639,7 +3639,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 16,
-        "y": 305,
+        "y": 314,
         "w": 8,
         "h": 8
       },
@@ -3702,7 +3702,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 313,
+        "y": 322,
         "w": 12,
         "h": 9
       },
@@ -3759,7 +3759,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 313,
+        "y": 322,
         "w": 12,
         "h": 9
       },
@@ -3815,7 +3815,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 322,
+        "y": 331,
         "w": 12,
         "h": 10
       },
@@ -3871,7 +3871,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 322,
+        "y": 331,
         "w": 12,
         "h": 10
       },
@@ -3928,7 +3928,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 332,
+        "y": 341,
         "w": 12,
         "h": 9
       },
@@ -4007,7 +4007,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 332,
+        "y": 341,
         "w": 12,
         "h": 9
       },
@@ -5219,13 +5219,199 @@
       }
     },
     {
+      "id": 99,
+      "type": "timeseries",
+      "title": "Generator Output and Blast Furnace Use",
+      "description": "As of the last world save. Generator output is its rated EU/t while active; blast furnace use is the current recipe EU/t.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 181,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "gt_generator_rated_output_eu_per_tick{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "Generator {{machine}} ({{x}},{{y}},{{z}})",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "-gt_machine_eu_per_tick{alias=\"$alias\",team=~\"$team\",mid=\"1000\"}",
+          "legendFormat": "Blast furnace ({{x}},{{y}},{{z}})",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              }
+            ]
+          },
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "unit": "none",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 38,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 2,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 100,
+      "type": "timeseries",
+      "title": "Generator Fuel",
+      "description": "Fluid in each combustion or diesel generator’s internal tank, as of the last world save. Amounts are in mB.",
+      "datasource": "prometheus",
+      "gridPos": {
+        "x": 12,
+        "y": 181,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": "prometheus",
+          "editorMode": "code",
+          "expr": "gt_generator_fuel_mb{alias=\"$alias\",team=~\"$team\"}",
+          "legendFormat": "{{fluid}} ({{x}},{{y}},{{z}})",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [],
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": 0,
+                "color": "green"
+              }
+            ]
+          },
+          "color": {
+            "mode": "continuous-BlPu"
+          },
+          "unit": "none",
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 38,
+            "gradientMode": "opacity",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 2,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
       "id": 78,
       "type": "row",
       "title": "Mining and Ore",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 181,
+        "y": 190,
         "w": 24,
         "h": 1
       },
@@ -5239,7 +5425,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 182,
+        "y": 191,
         "w": 6,
         "h": 4
       },
@@ -5297,7 +5483,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 6,
-        "y": 182,
+        "y": 191,
         "w": 6,
         "h": 4
       },
@@ -5342,7 +5528,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 182,
+        "y": 191,
         "w": 6,
         "h": 4
       },
@@ -5387,7 +5573,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 18,
-        "y": 182,
+        "y": 191,
         "w": 6,
         "h": 4
       },
@@ -5431,7 +5617,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 186,
+        "y": 195,
         "w": 24,
         "h": 7
       },
@@ -5592,7 +5778,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 193,
+        "y": 202,
         "w": 8,
         "h": 12
       },
@@ -5639,7 +5825,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 193,
+        "y": 202,
         "w": 16,
         "h": 12
       },
@@ -5702,7 +5888,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 205,
+        "y": 214,
         "w": 24,
         "h": 1
       },
@@ -5715,7 +5901,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 206,
+        "y": 215,
         "w": 8,
         "h": 11
       },
@@ -5762,7 +5948,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 8,
-        "y": 206,
+        "y": 215,
         "w": 16,
         "h": 11
       },
@@ -5831,7 +6017,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 217,
+        "y": 226,
         "w": 24,
         "h": 10
       },
@@ -5956,7 +6142,7 @@
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 227,
+        "y": 236,
         "w": 24,
         "h": 1
       },
@@ -5970,7 +6156,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 228,
+        "y": 237,
         "w": 6,
         "h": 4
       },
@@ -6033,7 +6219,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 6,
-        "y": 228,
+        "y": 237,
         "w": 6,
         "h": 4
       },
@@ -6096,7 +6282,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 228,
+        "y": 237,
         "w": 6,
         "h": 4
       },
@@ -6151,7 +6337,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 18,
-        "y": 228,
+        "y": 237,
         "w": 6,
         "h": 4
       },
@@ -6206,7 +6392,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 232,
+        "y": 241,
         "w": 12,
         "h": 10
       },
@@ -6261,7 +6447,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 232,
+        "y": 241,
         "w": 12,
         "h": 10
       },
@@ -6324,7 +6510,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 0,
-        "y": 242,
+        "y": 251,
         "w": 12,
         "h": 9
       },
@@ -6383,7 +6569,7 @@
       "datasource": "prometheus",
       "gridPos": {
         "x": 12,
-        "y": 242,
+        "y": 251,
         "w": 12,
         "h": 9
       },

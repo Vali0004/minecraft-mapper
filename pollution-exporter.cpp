@@ -354,10 +354,10 @@ struct Boiler {
   map<string, int64_t> fuel_fluids;  // a liquid firebox's fuel tank (creosote, oil...)
 };
 
-// GregTech single block boilers, from GT 5.09.51's MetaTileEntityIDs and MTEBoiler: every 10 ticks, while
-// mTemperature > 100 and there is water, a boiler makes half its getProductionPerSecond(), so above 100 it runs
-// at its full rate. solar boilers' output depends on config, calcification and sunlight, none of which is in the
-// save, so they get no production figure
+// GregTech single block boilers, from GT 5.09.51's MTEBoiler and GT++'s MTEAdvancedBoilerBase:
+// every 10 ticks, while mTemperature > 100 and there is water, a boiler makes half its
+// getProductionPerSecond(), so above 100 it runs at its full rate. Solar boilers' output
+// depends on config, calcification and sunlight, none of which is in the save.
 struct GtBoilerSpec { int id; const char *name; int steam_per_second; int max_temperature; };
 static const GtBoilerSpec gt_boilers[] = {
   { 100, "Small Coal Boiler", 120, 500 },
@@ -365,6 +365,9 @@ static const GtBoilerSpec gt_boilers[] = {
   { 102, "High Pressure Lava Boiler", 600, 1000 },
   { 105, "Simple Solar Boiler", -1, 500 },
   { 114, "High Pressure Solar Boiler", -1, 1000 },
+  { 753, "Advanced Boiler [LV]", 750, 1250 },
+  { 754, "Advanced Boiler [MV]", 1500, 1500 },
+  { 755, "Advanced Boiler [HV]", 2250, 1750 },
 };
 
 struct GtBoiler {
@@ -407,6 +410,8 @@ struct GtMachine {
   int x, y, z, id;
   bool active;
   double progress, max_progress, eu_stored, steam_stored, eu_per_tick;
+  string fuel_fluid;
+  int64_t fuel_mb = 0;
   map<ItemKey, int64_t> outputs;
 };
 
@@ -721,6 +726,13 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
         m.eu_stored = te.numbers["mStoredEnergy"];
         m.steam_stored = te.numbers["mStoredSteam"];
         m.eu_per_tick = te.numbers["mEUt"];
+        if (m.id >= 1110 && m.id <= 1114) {
+          auto fuel = te.fluids.find("mFluid");
+          if (fuel != te.fluids.end() && !fuel->second.name.empty()) {
+            m.fuel_fluid = fuel->second.name;
+            m.fuel_mb = fuel->second.amount;
+          }
+        }
         for (auto &[slot, st] : te.outputs)
           if (st.id > 0 && st.count > 0) m.outputs[{st.id, st.damage}] += st.count;
         r.chunks[i].gt_machines.push_back(m);
@@ -1217,6 +1229,20 @@ void collect_containers(const path savepath, string &out) {
       fmt(out, "%s{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",mid=\"%d\"} %g\n", machine_metrics[k].name,
           esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), m.id, v);
     }
+  }
+  out += "# HELP gt_generator_rated_output_eu_per_tick Rated EU/t output of an active GregTech combustion or diesel generator, not measured cable delivery\n# TYPE gt_generator_rated_output_eu_per_tick gauge\n";
+  for (auto &[team, dim, m] : machines) {
+    if (m.id < 1110 || m.id > 1114) continue;
+    // GT's LV through IV diesel generators output the tier voltage when active.
+    static const int output[] = {32, 128, 512, 2048, 8192};
+    fmt(out, "gt_generator_rated_output_eu_per_tick{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",mid=\"%d\"} %d\n",
+        esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), m.id, m.active ? output[m.id - 1110] : 0);
+  }
+  out += "# HELP gt_generator_fuel_mb Fuel in a GregTech combustion or diesel generator's internal fluid tank\n# TYPE gt_generator_fuel_mb gauge\n";
+  for (auto &[team, dim, m] : machines) {
+    if (m.id < 1110 || m.id > 1114 || m.fuel_fluid.empty()) continue;
+    fmt(out, "gt_generator_fuel_mb{team=\"%s\",dim=\"%d\",x=\"%d\",y=\"%d\",z=\"%d\",machine=\"%s\",mid=\"%d\",fluid=\"%s\"} %ld\n",
+        esc(team).c_str(), dim, m.x, m.y, m.z, esc(machine_name(m.id)).c_str(), m.id, esc(m.fuel_fluid).c_str(), m.fuel_mb);
   }
   out += "# HELP gt_machine_output_items What a GregTech machine's running recipe will produce\n# TYPE gt_machine_output_items gauge\n";
   for (auto &[team, dim, m] : machines)
