@@ -105,6 +105,17 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .nomachine { background: var(--bad-soft); color: var(--bad); }
 .yield { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .hint { background: var(--held-soft); border-color: transparent; color: var(--text); font-size: 14px; }
+/* a recipe in words, under its picture */
+.words { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.words .w { color: var(--text); white-space: nowrap; }
+.words .w.missing { color: var(--bad); }
+.words .w.kept { color: var(--held); }
+.words .w button { all: unset; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.words .amt { font-variant-numeric: tabular-nums; }
+.alt .use { margin-left: auto; border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.alt .use:hover, .alt .use[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.alt.chosen { border-color: var(--accent); }
+.hint button { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; }
 .note { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
@@ -123,8 +134,10 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
   </div>
   <p class="note">
     Steps start from what the team has: everything in containers in its claimed chunks and in its members' inventories,
-    ender chests and backpacks. A step needs a machine the team owns, at the right voltage. The steps are the shortest
-    chain, not the best yield; open "every recipe" and sort by yield for that. Water and GregTech programmed circuits
+    ender chests and backpacks. A step needs a machine the team owns, at the right voltage. The steps are the route
+    that uses up the least of what the team has, counted all the way down (an item counts 1, 144 mB of a fluid
+    counts 1, each run a little), byproducts aren't counted. Anything the team already has is used as is, not
+    made. Under "other ways", "plan with this" routes through that recipe instead. Water and GregTech programmed circuits
     (set in the machine) are free. Machines outside GregTech, the crafting grid and the furnace (Forestry, Thaumcraft…)
     aren't known.
   </p>
@@ -134,7 +147,7 @@ const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
-let current = null, onlyReady = false, sortBy = store.get("recipes.sort") || "default", names = {};
+let current = null, forced = null, onlyReady = false, sortBy = store.get("recipes.sort") || "route", names = {};
 const icons = { size: 16, columns: 128, cells: {} };
 const isFluid = k => k.startsWith("fluid:");
 const name = k => names[k] || k;
@@ -207,7 +220,35 @@ function drawRecipe(r, ins, scale = 1) {
   const out = el("div", "row out");
   for (const [k, n, chance] of r.out) out.append(slot(k, n * scale, { title: chance < 10000 ? `${chance / 100}% chance` : "" }));
   wrap.append(out);
-  return wrap;
+  // the same, in words
+  const words = el("div", "words");
+  const word = (k, n, o = {}) => {
+    const w = el("span", "w" + (o.missing ? " missing" : "") + (o.kept || n === 0 ? " kept" : ""));
+    if (n) w.append(el("span", "amt", amount(k, n) + (isFluid(k) ? " " : "× ")));
+    const b = el("button", null, name(k));
+    b.addEventListener("click", () => open(k));
+    w.append(b);
+    if (o.kept || n === 0) w.append(" (kept)");
+    if (o.missing) w.append(" (missing)");
+    return w;
+  };
+  // the grid's identical ingredients together
+  const tally = new Map();
+  for (const [k, n, o] of shown) {
+    if (!k) continue;
+    const t = tally.get(k);
+    if (t && r.t === "crafting") t[1] += n * scale; else tally.set(t ? k + "\0" + tally.size : k, [k, n * scale, o || {}]);
+  }
+  [...tally.values()].forEach(([k, n, o], i) => { if (i) words.append(" + "); words.append(word(k, n, o)); });
+  words.append(" → ");
+  r.out.forEach(([k, n, chance], i) => {
+    if (i) words.append(" + ");
+    words.append(word(k, n * scale));
+    if (chance < 10000) words.append(` (${chance / 100}%)`);
+  });
+  const box = el("div");
+  box.append(wrap, words);
+  return box;
 }
 
 // search, as you type
@@ -298,23 +339,13 @@ function howTo(r, key, qty) {
   if (extra.length) needCard.append(el("div", "muted", extra.join(" ")));
   parts.push(needCard);
 
-  // the route is the shortest, not the best: say when the last step has a recipe with a far better yield
-  const last = route.nodes[p.canon(key)];
-  if (last && last.length === 3 && last[1] >= 0 && r.producers.length) {
-    const rc = route.recipes[last[1]], fluid = isFluid(key);
-    const per = rc.out.filter(o => o[0] === p.canon(key)).reduce((a, [, n, c]) => a + n * c / 10000, 0);
-    const input = last[2].reduce((a, u, i) => a + (u && rc.in[i] > 0 && isFluid(u) === fluid ? rc.in[i] : 0), 0);
-    const mine = input ? per / input : null;
-    const better = r.producers.map(x => ({ x, y: yieldOf(x, key) })).filter(({ y }) => y.ratio !== null && mine !== null && y.ratio >= mine * 1.5)
-      .sort((a, b) => b.y.ratio - a.y.ratio)[0];
-    if (better) {
-      const n = el("div", "card hint");
-      n.append(`These steps are the shortest way, but the last one turns ${fmt(mine * 100)}% of its input into ${name(key)}. `,
-               el("strong", null, machine(better.x)), ` gets ${fmt(better.y.ratio * 100)}%` +
-               (better.x.state === "ready" ? ", and you can run it now." : better.x.state === "no machine" ? ", once you have the machine for it." : ", once you have its ingredients.") +
-               " See every recipe below, sorted by yield.");
-      parts.push(n);
-    }
+  // routed through a recipe picked below: say so, and how to go back
+  if (route.forced != null) {
+    const n = el("div", "card hint"), back = el("button", null, "Go back to the thriftiest route");
+    back.addEventListener("click", () => { forced = null; open(key); });
+    const rc = route.recipes[route.forced];
+    n.append("Making it with the ", el("strong", null, machine(rc)), " recipe you picked. ", back);
+    parts.push(n);
   }
 
   // the steps, in the order to do them
@@ -356,7 +387,7 @@ function yieldOf(p, key) {
   return { per, ratio: input ? per / input : null };
 }
 
-function altCard(p, key) {
+function altCard(p, key, best) {
   const c = el("div", "card alt"), h = el("div", "head");
   const cls = p.state === "ready" ? "ready" : p.state === "no machine" ? "nomachine" : "missingb";
   h.append(el("strong", null, machine(p)));
@@ -366,13 +397,26 @@ function altCard(p, key) {
   h.append(el("span", "yield", `${amount(key, y.per)} per run` + (y.ratio !== null ? ` · ${fmt(y.ratio * 100)}% of ${isFluid(key) ? "fluid" : "items"} in` : "")));
   const circ = p.slots.map(s => s.alts.length ? circuitOf(s.alts[0][0]) : null).find(x => x !== null);
   if (circ !== undefined && circ !== null) h.append(el("span", "chip circuit", `circuit ${circ}`));
+  // the whole route through it, against the thriftiest
+  if (p.cost != null && best) {
+    const x = p.cost / best;
+    h.append(el("span", "chip" + (x < 1.005 ? " circuit" : ""), x < 1.005 ? "thriftiest route" : `route uses ${fmt(x)}× as much`));
+  }
+  if (p.cost != null) {
+    const b = el("button", "use", forced === p.id ? "planning with this" : "plan with this");
+    b.setAttribute("aria-pressed", forced === p.id);
+    b.title = "Show every step from what you have, making it this way";
+    b.addEventListener("click", () => { forced = forced === p.id ? null : p.id; open(current).then(() => $("howto")?.scrollIntoView({ behavior: "smooth" })); });
+    h.append(b);
+  }
+  if (forced === p.id) c.classList.add("chosen");
   c.append(h);
   const ins = p.slots.map(s => {
     if (!s.alts.length) return [null, 0];
     // the alternative that's easiest to get
-    const best = [...s.alts].sort((a, b) => (a[1] ?? 1e9) - (b[1] ?? 1e9))[0];
+    const pick = [...s.alts].sort((a, b) => (a[1] ?? 1e9) - (b[1] ?? 1e9))[0];
     const others = s.alts.length - 1 + s.more;
-    return [best[0], s.count, { missing: best[1] === null, kept: s.count === 0, title: others > 0 ? `or ${others} other${others > 1 ? "s" : ""}: ${s.alts.filter(a => a !== best).map(a => name(a[0])).join(", ")}` : "" }];
+    return [pick[0], s.count, { missing: pick[1] === null, kept: s.count === 0, title: others > 0 ? `or ${others} other${others > 1 ? "s" : ""}: ${s.alts.filter(a => a !== pick).map(a => name(a[0])).join(", ")}` : "" }];
   });
   c.append(drawRecipe(p, ins));
   return c;
@@ -380,11 +424,12 @@ function altCard(p, key) {
 
 // one item: how to make it, then every recipe making it
 async function open(key, push = true) {
+  if (key !== current) forced = null;
   current = key;
   if (push) history.replaceState(null, "", `#g=${encodeURIComponent($("group").value)}&k=${encodeURIComponent(key)}`);
   for (const b of $("results").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.key === key);
   $("detail").replaceChildren(el("p", "muted", "Loading…"));
-  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}`)).json();
+  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}${forced != null ? "&recipe=" + forced : ""}`)).json();
   if (current !== key) return;
   if (r.error) { $("detail").replaceChildren(el("p", "muted", r.error)); return; }
   learn(r);
@@ -400,7 +445,8 @@ function render(r, key, qty) {
   parts.push(title);
   parts.push(el("div", "muted", `${r.producers_total ? r.producers_total + " recipe" + (r.producers_total > 1 ? "s" : "") + " make it" : "No recipe makes it, it's gathered"} · used in ${r.uses}`));
 
-  parts.push(el("h3", null, "How to make it"));
+  const hh = el("h3", null, "How to make it"); hh.id = "howto";
+  parts.push(hh);
   const q = qty ?? (isFluid(key) ? 1000 : 1);
   const qrow = el("div", "qtyrow"), input = el("input", "qty");
   input.type = "number"; input.min = 1; input.value = q;
@@ -425,7 +471,7 @@ function render(r, key, qty) {
     }
     const sort = el("select", "sort");
     sort.setAttribute("aria-label", "Sort recipes");
-    for (const [v, label] of [["default", "Easiest first"], ["ratio", "Best yield per input"], ["per", "Most per run"]]) {
+    for (const [v, label] of [["route", "Thriftiest route from what you have"], ["default", "Fewest steps"], ["ratio", "Best yield of this step"], ["per", "Most per run"]]) {
       const o = el("option", null, label); o.value = v; sort.append(o);
     }
     sort.value = sortBy;
@@ -436,9 +482,11 @@ function render(r, key, qty) {
     const fill = () => {
       const shown = r.producers.filter(p => !onlyReady || p.state === "ready");
       for (const p of shown) p.yield = yieldOf(p, key);
-      if (sortBy === "ratio") shown.sort((a, b) => (b.yield.ratio ?? -1) - (a.yield.ratio ?? -1) || b.yield.per - a.yield.per);
+      const best = r.route.cost ?? Math.min(...r.producers.map(p => p.cost ?? Infinity));
+      if (sortBy === "route") shown.sort((a, b) => (a.cost ?? Infinity) - (b.cost ?? Infinity) || (a.state > b.state) - (a.state < b.state));
+      else if (sortBy === "ratio") shown.sort((a, b) => (b.yield.ratio ?? -1) - (a.yield.ratio ?? -1) || b.yield.per - a.yield.per);
       else if (sortBy === "per") shown.sort((a, b) => b.yield.per - a.yield.per);
-      list.replaceChildren(...(shown.length ? shown.map(p => altCard(p, key)) : [el("p", "muted", "None you can make now.")]),
+      list.replaceChildren(...(shown.length ? shown.map(p => altCard(p, key, isFinite(best) ? best : null)) : [el("p", "muted", "None you can make now.")]),
                            ...(r.producers.length < r.producers_total ? [el("p", "muted", `Showing ${r.producers.length} of ${r.producers_total}.`)] : []));
     };
     fill();

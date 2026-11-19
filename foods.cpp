@@ -142,9 +142,38 @@ string display(int k) {
 struct Solved {
   vector<int> dist, best, any;  // per key: steps from what's held, the recipe that does it; per item: best over damages
   vector<int> tier;             // per recipe type: the best voltage tier the group can run it at, -1 for none
+  // per key: how much of the group's holdings one of it (one mB for a fluid) uses up on its cheapest route, and
+  // that route's recipe (-1 when held); per item: the cheapest over damages. INFINITY when unreachable
+  vector<double> cost, cost_any;
+  vector<int> cheapest;
 };
 
 int cost_of(const Solved &s, int alt) { return wild[alt] ? s.any[name_of[alt]] : s.dist[alt]; }
+double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[alt]] : s.cost[alt]; }
+
+// what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
+// also costs a little, so of two equally thrifty routes the shorter wins
+const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0.05;
+
+// what one run of recipe r uses up, in held-material terms; INFINITY if a slot can't be had
+double run_cost(const Solved &s, const Recipe &rc) {
+  double c = PER_RUN;
+  for (auto &slot : rc.in) {
+    if (slot.alts.empty()) continue;
+    double b = INFINITY;
+    for (int a : slot.alts) b = min(b, raw_of(s, a));
+    if (b == INFINITY) return INFINITY;
+    c += slot.count * b;
+  }
+  return c;
+}
+// how much of key k one run of rc makes, on average
+double made_per_run(const Recipe &rc, int k) {
+  double n = 0;
+  for (auto &o : rc.out)
+    if (o.key == k) n += o.amount * o.chance / 10000.0;
+  return n;
+}
 
 // how many recipe steps each key is from the group's holdings. a recipe works when its machine is owned (with
 // the voltage) and every slot has an alternative that's reachable, its outputs are one step past its slowest
@@ -208,6 +237,50 @@ Solved solve(const FoodGroup &g) {
     }
     if (!changed) break;
   }
+
+  // then the thriftiest route to each reachable key: keep relaxing "a run's inputs / what it makes" until
+  // nothing gets cheaper. what's held stays a leaf, use what you have before making more of it
+  s.cost.assign(keys.size(), INFINITY);
+  s.cost_any.assign(name_index.size(), INFINITY);
+  s.cheapest.assign(keys.size(), -1);
+  auto cheaper = [&](int k, double c, int r) {
+    if (!(c < s.cost[k] * (1 - 1e-9))) return false;
+    s.cost[k] = c;
+    s.cheapest[k] = r;
+    if (name_of[k] >= 0) s.cost_any[name_of[k]] = min(s.cost_any[name_of[k]], c);
+    return true;
+  };
+  // water and programmed circuits cost nothing (see above)
+  auto circuit = name_index.find("gregtech:gt.integrated_circuit");
+  for (int k = 0; k < (int)keys.size(); k++) {
+    if (s.dist[k] != 0) continue;
+    bool free = keys[k] == "fluid:water" || (circuit != name_index.end() && name_of[k] == circuit->second);
+    cheaper(k, free ? 0 : keys[k].compare(0, 6, "fluid:") == 0 ? MB : ITEM, -1);
+  }
+  for (size_t n = 0; n < name_index.size(); n++)
+    if (s.any[n] == 0 && s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
+  vector<int> runnable;
+  for (int r = 0; r < (int)recipes.size(); r++) {
+    const Recipe &rc = recipes[r];
+    if (tier[rc.type] < 0 || (rc.eut > 0 && tier_for(rc.eut) > tier[rc.type])) continue;
+    bool useful = false;
+    for (auto &o : rc.out) useful |= s.dist[o.key] > 0 && s.dist[o.key] < INF;
+    if (useful) runnable.push_back(r);
+  }
+  for (int pass = 0; pass < 200; pass++) {
+    bool changed = false;
+    for (int r : runnable) {
+      const Recipe &rc = recipes[r];
+      double c = run_cost(s, rc);
+      if (c == INFINITY) continue;
+      for (auto &o : rc.out) {
+        if (s.dist[o.key] == 0) continue;
+        double per = made_per_run(rc, o.key);
+        if (per > 0) changed |= cheaper(o.key, c / per, r);
+      }
+    }
+    if (!changed) break;
+  }
   return s;
 }
 
@@ -229,45 +302,127 @@ json recipe_json(int r, set<int> &named) {
   return j;
 }
 
-// the cheapest way to key k: its steps, the recipe, and which alternative each slot uses, then the same for
-// those, into nodes (key -> [steps] when held, [steps, recipe, [used keys]] when made, [steps, -1, [key]] for
-// "any damage" made as a specific one)
-void add_tree(const Solved &s, int k, json &nodes, json &jr, set<int> &named, set<int> &seen) {
-  if (!seen.insert(k).second) return;
-  named.insert(k);
-  int r = wild[k] ? -1 : s.best[k];
-  int d = cost_of(s, k);
-  if (d >= INF) {
-    nodes[keys[k]] = {nullptr};
-    return;
+// the thriftiest way to key k: the recipe, and which alternative each slot uses, then the same for those, into
+// nodes (key -> [steps] when held, [steps, recipe, [used keys]] when made, [steps, -1, [key]] for "any damage"
+// made as a specific one). the thriftiest picks can loop (x is cheapest made from y, y from x), so this tries the
+// options cheapest first and backs out of one that would need something it's still making higher up
+struct TreeBuild {
+  const Solved &s;
+  json &nodes, &jr;
+  set<int> &named, &seen;
+  set<int> stack;
+  vector<int> added;  // keys given a node, in order, to back out
+  bool thrifty = true;
+  int budget = 50000;
+
+  void put(int k, json node) {
+    nodes[keys[k]] = move(node);
+    seen.insert(k);
+    added.push_back(k);
   }
-  if (wild[k] && d > 0) {
-    for (int k2 : keys_of_name[name_of[k]])
-      if (!wild[k2] && s.dist[k2] == d) {
-        nodes[keys[k]] = {d, -1, json::array({keys[k2]})};
-        add_tree(s, k2, nodes, jr, named, seen);
-        return;
-      }
-  }
-  if (r < 0) {
-    nodes[keys[k]] = {d};
-    return;
-  }
-  json uses = json::array();
-  for (auto &slot : recipes[r].in) {
-    if (slot.alts.empty()) {
-      uses.push_back(nullptr);
-      continue;
+  void back_to(size_t n) {
+    while (added.size() > n) {
+      nodes.erase(keys[added.back()]);
+      seen.erase(added.back());
+      added.pop_back();
     }
-    int pick = slot.alts[0], best = INF;
-    for (int a : slot.alts)
-      if (cost_of(s, a) < best) best = cost_of(s, a), pick = a;
-    uses.push_back(keys[pick]);
   }
-  nodes[keys[k]] = {d, r, uses};
-  if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
-  for (auto &u : uses)
-    if (!u.is_null()) add_tree(s, key_index[u.get<string>()], nodes, jr, named, seen);
+  // the recipes worth trying for k, cheapest first (fewest steps: just the one the step solve found)
+  vector<int> candidates(int k) {
+    if (!thrifty) return s.best[k] >= 0 ? vector<int>{s.best[k]} : vector<int>{};
+    vector<pair<double, int>> c;
+    for (int r : made_by[k]) {
+      double per = made_per_run(recipes[r], k);
+      if (per <= 0 || !machine_ok(s, recipes[r])) continue;
+      double rc = run_cost(s, recipes[r]);
+      if (rc < INFINITY) c.emplace_back(rc / per, r);
+    }
+    sort(c.begin(), c.end());
+    vector<int> out;
+    for (auto &[cost, r] : c) out.push_back(r);
+    return out;
+  }
+  vector<int> alts(const Slot &slot) {
+    vector<int> a;
+    for (int x : slot.alts)
+      if (cost_of(s, x) < INF) a.push_back(x);
+    if (thrifty)
+      stable_sort(a.begin(), a.end(), [&](int x, int y) { return raw_of(s, x) < raw_of(s, y) || (raw_of(s, x) == raw_of(s, y) && cost_of(s, x) < cost_of(s, y)); });
+    else
+      stable_sort(a.begin(), a.end(), [&](int x, int y) { return cost_of(s, x) < cost_of(s, y); });
+    return a;
+  }
+  // make k with recipe r: every slot from its cheapest alternative that works
+  bool with(int k, int r, int d) {
+    size_t mark = added.size();
+    json ju = json::array();
+    for (auto &slot : recipes[r].in) {
+      if (slot.alts.empty()) {
+        ju.push_back(nullptr);
+        continue;
+      }
+      bool ok = false;
+      for (int a : alts(slot))
+        if (add(a)) {
+          ju.push_back(keys[a]);
+          ok = true;
+          break;
+        }
+      if (!ok) {
+        back_to(mark);
+        return false;
+      }
+    }
+    put(k, {max(d, 1), r, ju});
+    if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
+    return true;
+  }
+  // give k a node; false if every way to it needs something being made higher up
+  bool add(int k, int force = -1) {
+    if (seen.count(k)) return true;
+    if (stack.count(k) || --budget < 0) return false;
+    named.insert(k);
+    int d = cost_of(s, k);
+    if (d >= INF) {
+      put(k, {nullptr});
+      return true;
+    }
+    if (d == 0 && force < 0) {
+      put(k, {0});
+      return true;
+    }
+    stack.insert(k);
+    bool ok = false;
+    if (wild[k]) {
+      vector<int> ks;
+      for (int k2 : keys_of_name[name_of[k]])
+        if (!wild[k2] && s.dist[k2] < INF) ks.push_back(k2);
+      stable_sort(ks.begin(), ks.end(), [&](int x, int y) { return thrifty ? s.cost[x] < s.cost[y] : s.dist[x] < s.dist[y]; });
+      for (int k2 : ks)
+        if (add(k2)) {
+          put(k, {d, -1, json::array({keys[k2]})});
+          ok = true;
+          break;
+        }
+    } else {
+      for (int r : force >= 0 ? vector<int>{force} : candidates(k))
+        if ((ok = with(k, r, d))) break;
+    }
+    stack.erase(k);
+    return ok;
+  }
+};
+
+void add_tree(const Solved &s, int k, json &nodes, json &jr, set<int> &named, set<int> &seen, int force = -1) {
+  TreeBuild b{s, nodes, jr, named, seen};
+  size_t mark = 0;
+  if (b.add(k, force)) return;
+  // gave up (out of budget, or nothing works without looping): the fewest steps never loops
+  b.back_to(mark);
+  b.thrifty = false;
+  b.budget = INT_MAX;
+  b.stack.clear();
+  b.add(k, force);
 }
 
 // a group's solve for the current snapshot, kept until the next one. call with state_lock held
@@ -456,7 +611,7 @@ string recipes_groups_json() {
   return json{{"groups", g}, {"players", players}}.dump();
 }
 
-string recipes_item_json(const string &key, const string &group) {
+string recipes_item_json(const string &key, const string &group, int force) {
   lock_guard<mutex> l(state_lock);
   auto f = key_index.find(key);
   if (!loaded || f == key_index.end()) return "{\"error\":\"unknown item\"}";
@@ -500,15 +655,24 @@ string recipes_item_json(const string &key, const string &group) {
     rj["state"] = state == 0 ? "ready" : state == 1 ? "missing ingredients" : "no machine";
     rj["steps"] = worst >= INF ? json(nullptr) : json(worst + 1);
     rj["id"] = r;
+    // what one of it uses up of the group's holdings going this way, all the way down
+    double per = made_per_run(recipes[r], k), c = state == 0 && per > 0 ? run_cost(*s, recipes[r]) / per : INFINITY;
+    rj["cost"] = c == INFINITY ? json(nullptr) : json(c);
     producers.push_back(rj);
   }
   out["producers"] = producers;
   out["producers_total"] = made_by[k].size();
-  // the group's cheapest route, as a tree
+  // the group's thriftiest route, as a tree, or the one through the recipe the page picked
+  bool forced = false;
+  if (force >= 0 && force < (int)recipes.size() && find(made_by[k].begin(), made_by[k].end(), force) != made_by[k].end() &&
+      machine_ok(*s, recipes[force]) && run_cost(*s, recipes[force]) < INFINITY)
+    forced = true;
   json nodes = json::object(), jr = json::object();
   set<int> seen;
-  add_tree(*s, k, nodes, jr, named, seen);
+  add_tree(*s, k, nodes, jr, named, seen, forced ? force : -1);
   out["route"] = {{"nodes", nodes}, {"recipes", jr}};
+  if (forced) out["route"]["forced"] = force;
+  out["route"]["cost"] = s->cost[k] == INFINITY ? json(nullptr) : json(s->cost[k]);
   // how much of each thing the route starts from the group has ("any damage": all damages together)
   json have = json::object();
   if (auto g = snapshot.groups.find(group); g != snapshot.groups.end())

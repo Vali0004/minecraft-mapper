@@ -41,10 +41,11 @@ void foods_update(FoodSnapshot s);
 std::string foods_state_json();
 extern const char foods_html[];
 
-// the recipe search page: items matching a name, every recipe making one, and a group's cheapest route to it
+// the recipe search page: items matching a name, every recipe making one, and a group's thriftiest route to it
 std::string recipes_search_json(const std::string &query);
 std::string recipes_groups_json();
-std::string recipes_item_json(const std::string &key, const std::string &group);
+// force: a recipe id to route through instead of the thriftiest, -1 for none
+std::string recipes_item_json(const std::string &key, const std::string &group, int force = -1);
 extern const char recipes_html[];
 // texture-dump's item_icons.png, empty without one
 const std::string &recipes_icons_png();
