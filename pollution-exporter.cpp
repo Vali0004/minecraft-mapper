@@ -1539,7 +1539,8 @@ static void load_dump(const path &dir) {
       coke_recipes[{r["input"]["item"].get<string>(), r["input"]["damage"].get<int>()}] = c;
     }
   });
-  if (exists(dir / "foods.json") && exists(dir / "recipes.json"))
+  // either recipe file: all_recipes.json (everything) or recipes.json (only what leads to food)
+  if (exists(dir / "foods.json") && (exists(dir / "all_recipes.json") || exists(dir / "recipes.json")))
     foods_load(dir, [](const string &key) {
       size_t c = key.rfind(':');
       auto names = item_names.find(key.substr(0, c));

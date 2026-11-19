@@ -54,7 +54,9 @@ a { color: var(--accent); }
 .st.held { color: var(--held); }
 .st.no { color: var(--bad); }
 .or { color: var(--muted); font-size: 12px; }
-.filters { display: flex; gap: 6px; margin-bottom: 8px; }
+.filters { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+.filters select { font: inherit; font-size: 13px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); }
+.yield { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .filters button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
 .filters button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .tree ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--line); }
@@ -80,7 +82,8 @@ a { color: var(--accent); }
   </div>
   <p class="note">
     Ready means the team owns a machine for it at that voltage and every ingredient is held or can be made.
-    Steps count the longest chain from what's held; the route picks the fewest steps, not the best yield, and
+    Steps count the longest chain from what's held; the route picks the fewest steps, not the best yield (sort the
+    recipes by yield for that: per run, or per mB of fluid / item of the same kind put in), and
     holding one of an ingredient counts as enough. Water and GregTech programmed circuits are free.
     Recipes from machines outside GregTech, the crafting grid and the furnace (Forestry, Thaumcraft…) aren't included.
   </p>
@@ -90,7 +93,16 @@ const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
-let current = null, onlyReady = false, names = {};
+let current = null, onlyReady = false, sortBy = "default", names = {};
+
+// how much of the item one run makes (chance counted), and that over the consumed inputs of the same kind:
+// mB of fluid in for a fluid, items in for an item. null when no input is of its kind (sapling + water -> biomass)
+function yieldOf(p, key) {
+  const per = p.out.filter(o => o[0] === key).reduce((a, [, n, c]) => a + n * c / 10000, 0);
+  const fluid = isFluid(key);
+  const input = p.slots.filter(s => s.count > 0 && isFluid(s.alts[0][0]) === fluid).reduce((a, s) => a + s.count, 0);
+  return { per, ratio: input ? per / input : null };
+}
 
 function machine(r) {
   if (r.t === "crafting") return "Crafting";
@@ -164,20 +176,33 @@ async function open(key, push = true) {
     b.addEventListener("click", () => { onlyReady = v; open(key, false); });
     filters.append(b);
   }
+  const sort = el("select");
+  sort.setAttribute("aria-label", "Sort recipes");
+  for (const [v, label] of [["default", "Ready first, fewest steps"], ["ratio", "Best yield per input"], ["per", "Most per run"]]) {
+    const o = el("option", null, label); o.value = v; sort.append(o);
+  }
+  sort.value = sortBy;
+  sort.addEventListener("change", () => { sortBy = sort.value; store.set("recipes.sort", sortBy); open(key, false); });
+  filters.append(sort);
   parts.push(filters);
   const shown = r.producers.filter(p => !onlyReady || p.state === "ready");
+  for (const p of shown) p.yield = yieldOf(p, key);
+  if (sortBy === "ratio") shown.sort((a, b) => (b.yield.ratio ?? -1) - (a.yield.ratio ?? -1) || b.yield.per - a.yield.per);
+  else if (sortBy === "per") shown.sort((a, b) => b.yield.per - a.yield.per);
   if (!shown.length) parts.push(el("p", "muted", onlyReady ? "None ready now." : "Nothing makes it, it's gathered."));
-  for (const p of shown) parts.push(recipeCard(p));
+  for (const p of shown) parts.push(recipeCard(p, key));
   if (r.producers.length < r.producers_total) parts.push(el("p", "muted", `Showing ${r.producers.length} of ${r.producers_total}.`));
   d.replaceChildren(...parts);
 }
 
-function recipeCard(p) {
+function recipeCard(p, key) {
   const c = el("div", "card"), h = el("div", "head");
   const cls = p.state === "ready" ? "ready" : p.state === "no machine" ? "nomachine" : "missing";
   h.append(el("span", "m", machine(p)));
   if (p.eut > 0) h.append(el("span", "muted", `${p.eut.toLocaleString()} EU/t · ${TIERS[p.tier] || p.tier}`));
   h.append(el("span", "badge " + cls, p.state === "ready" ? `ready · ${p.steps} step${p.steps > 1 ? "s" : ""}` : p.state));
+  const y = p.yield;
+  if (y) h.append(el("span", "yield", `${amount(key, +y.per.toFixed(2))} per run` + (y.ratio !== null ? ` · ${+(y.ratio * 100).toFixed(1)}% of ${isFluid(key) ? "fluid" : "items"} in` : "")));
   const io = el("div", "io"), ins = el("ul"), outs = el("ul");
   for (const s of p.slots) {
     const li = el("li");
@@ -230,6 +255,7 @@ fetch("groups.json").then(r => r.json()).then(g => {
   const label = k => k.startsWith("player:") ? k.slice(7) : `Team ${k}`;
   sel.replaceChildren(...g.groups.filter(k => k).sort((a, b) => a.startsWith("player:") - b.startsWith("player:") || a.localeCompare(b))
     .map(k => { const o = el("option", null, label(k)); o.value = k; return o; }));
+  sortBy = store.get("recipes.sort") || "default";
   const saved = store.get("recipes.group");
   if (saved && g.groups.includes(saved)) sel.value = saved;
   sel.addEventListener("change", () => { store.set("recipes.group", sel.value); if (current) open(current, false); });
