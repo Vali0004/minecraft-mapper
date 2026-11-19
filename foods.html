@@ -34,21 +34,16 @@ h1 { font-size: 22px; margin: 0 0 4px; }
 .tools input, .tools select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
   background: var(--panel); color: var(--text); }
 .tools input { flex: 1; min-width: 180px; }
-.food { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px; }
-.food > summary { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none; }
-.food > summary::-webkit-details-marker { display: none; }
-.food > summary .n { flex: 1; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
-.food > summary .m { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.food { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 10px; padding: 6px 12px; flex-wrap: wrap; }
+.food .n { flex: 1; font-weight: 600; min-width: 140px; overflow-wrap: anywhere; }
+.food .m { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .steps { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
-.tree { padding: 4px 12px 12px 14px; font-size: 14px; }
-.tree ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--line); }
-.tree > ul { padding-left: 0; border: 0; }
-.tree li { margin: 3px 0; }
-.tree details > summary { cursor: pointer; }
-.via { color: var(--muted); font-size: 12px; }
-.held { background: var(--held-soft); color: var(--held); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+.go { font-size: 14px; white-space: nowrap; color: var(--accent); }
+.icon { width: 32px; height: 32px; flex: none; image-rendering: pixelated; background-repeat: no-repeat; display: inline-block; }
+.icon.none { display: inline-grid; place-items: center; background: var(--line); border-radius: 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .plain { list-style: none; padding: 0; margin: 0; columns: 2 260px; }
-.plain li { padding: 3px 0; break-inside: avoid; }
+.plain li { padding: 3px 0; break-inside: avoid; display: flex; align-items: center; gap: 8px; }
 .empty, .note { color: var(--muted); font-size: 13px; }
 .note { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; }
 </style>
@@ -76,7 +71,7 @@ h1 { font-size: 22px; margin: 0 0 4px; }
     Craftable means it can be made from what the player's team holds right now: containers in the team's claimed
     chunks and every member's inventory, ender chest and backpacks, using crafting, smelting and GregTech recipes
     the team has a machine of the right voltage for. Holding one of an ingredient counts as enough, amounts are not
-    checked. Steps is the longest chain of recipes to it, everything along a chain counts once. Water is free.
+    checked. Steps is the longest chain of recipes to it; "How to make it" lists them in order, with amounts. Water is free.
     Players in no team only have their own inventory.
   </p>
 </main>
@@ -87,44 +82,15 @@ const $ = id => document.getElementById(id);
 const name = k => S.names[k] || k;
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
-function machine(r) {
-  if (r.t === "crafting") return "Crafting";
-  if (r.t === "smelting") return "Furnace";
-  if (r.t === "fill") return "Fill at water";
-  let m = r.t.replace(/^gt\.recipe\./, "").replace(/^gtpp?\.recipe\./, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[._]/g, " ");
-  m = m.charAt(0).toUpperCase() + m.slice(1);
-  return r.tier >= 0 ? `${m}, ${TIERS[r.tier] || r.tier}` : m;
-}
-
-// one ingredient line, its own recipe shown when opened
-function node(group, key, count) {
-  const li = el("li");
-  const n = group.nodes[key];
-  const label = (count > 1 ? count + "× " : count === 0 ? "" : "") + name(key);
-  if (!n || n[0] === 0 || n.length < 2) {
-    li.append(label + " ");
-    li.append(el("span", "held", n && n[0] === 0 ? "held" : "?"));
-    if (count === 0) li.append(" ", el("span", "via", "not used up"));
-    return li;
-  }
-  if (n[1] === -1) return node(group, n[2][0], count);  // any damage, made as this one
-  const d = el("details"), s = el("summary");
-  const r = S.recipes[n[1]];
-  s.append(label + " ", el("span", "via", `${machine(r)} · ${n[0]} step${n[0] > 1 ? "s" : ""}` + (count === 0 ? " · not used up" : "")));
-  d.append(s);
-  d.addEventListener("toggle", () => { if (d.open && d.children.length === 1) d.append(recipe(group, n)); });
-  li.append(d);
-  return li;
-}
-
-function recipe(group, n) {
-  const r = S.recipes[n[1]], ul = el("ul");
-  if (r.out.length > 1) ul.append(el("li", "via", "also makes " + r.out.slice(1).map(o => name(o[0])).join(", ")));
-  // the same ingredient in several slots is one line, its counts summed ("8× Copper Wire")
-  const merged = new Map();
-  n[2].forEach((k, i) => merged.set(k, (merged.get(k) ?? 0) + r.in[i]));
-  for (const [k, count] of merged) ul.append(node(group, k, count));
-  return ul;
+// the game's own picture of an item, from the icon sheet
+function icon(k) {
+  const c = S.icons?.cells?.[k];
+  if (c === undefined) return el("span", "icon none", (name(k)[0] || "?").toUpperCase());
+  const s = el("span", "icon"), size = S.icons.size, cols = S.icons.columns;
+  s.style.backgroundImage = "url(icons.png)";
+  s.style.backgroundSize = `${cols * 32}px auto`;
+  s.style.backgroundPosition = `-${(c % cols) * 32}px -${Math.floor(c / cols) * 32}px`;
+  return s;
 }
 
 function render() {
@@ -144,7 +110,7 @@ function render() {
   if (tab === "eaten") {
     const ul = el("ul", "plain");
     [...eaten].map(k => [k, name(k)]).filter(([, n]) => !q || n.toLowerCase().includes(q)).sort((a, b) => a[1].localeCompare(b[1]))
-      .forEach(([k, n]) => ul.append(el("li", null, n)));
+      .forEach(([k, n]) => { const li = el("li"); li.append(icon(k), el("span", null, n)); ul.append(li); });
     list.replaceChildren(ul.children.length ? ul : el("p", "empty", "Nothing here."));
     return;
   }
@@ -154,22 +120,12 @@ function render() {
           : (a, b) => a.s - b.s || b.f.hunger - a.f.hunger);
   const frag = document.createDocumentFragment();
   for (const x of rows) {
-    const d = el("details", "food"), s = el("summary");
-    s.append(el("span", "n", x.n), el("span", "m", `${x.f.hunger} hunger · ${(x.f.saturation).toFixed(2)} sat`),
-             el("span", "steps", x.s === 0 ? "held" : `${x.s} step${x.s > 1 ? "s" : ""}`));
-    d.append(s);
-    d.addEventListener("toggle", () => {
-      if (!d.open || d.children.length > 1) return;
-      const t = el("div", "tree"), ul = el("ul");
-      const n = group.nodes[x.k];
-      if (x.s === 0) ul.append(el("li", null, "In the team's storage already."));
-      else ul.append(...recipe(group, n.length === 3 && n[1] === -1 ? group.nodes[n[2][0]] : n).children);
-      const r = S.recipes[(n[1] === -1 ? group.nodes[n[2][0]] : n)?.[1]];
-      if (r) t.append(el("div", "via", "Last step: " + machine(r)));
-      t.append(ul);
-      d.append(t);
-    });
-    frag.append(d);
+    const row = el("div", "food");
+    const go = el("a", "go", x.s === 0 ? "In storage" : "How to make it →");
+    go.href = `../recipes/#g=${encodeURIComponent(p.group)}&k=${encodeURIComponent(x.k)}`;
+    row.append(icon(x.k), el("span", "n", x.n), el("span", "m", `${x.f.hunger} hunger · ${(x.f.saturation).toFixed(2)} sat`),
+               el("span", "steps", x.s === 0 ? "have it" : `${x.s} step${x.s > 1 ? "s" : ""}`), go);
+    frag.append(row);
   }
   list.replaceChildren(rows.length ? frag : el("p", "empty", q ? "No match." : "Nothing craftable that hasn't been eaten."));
 }

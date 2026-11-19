@@ -46,3 +46,5 @@ std::string recipes_search_json(const std::string &query);
 std::string recipes_groups_json();
 std::string recipes_item_json(const std::string &key, const std::string &group);
 extern const char recipes_html[];
+// texture-dump's item_icons.png, empty without one
+const std::string &recipes_icons_png();

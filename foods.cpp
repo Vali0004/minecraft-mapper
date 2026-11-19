@@ -30,6 +30,7 @@ struct Out {
 struct Recipe {
   int type;  // index into types
   int eut;
+  int w = 0, h = 0;  // a shaped crafting grid (its slots row by row, empty cells have no alternatives), 0 if shapeless
   vector<Slot> in;
   vector<Out> out;
 };
@@ -54,6 +55,22 @@ map<int, Food> foods;  // key -> food
 map<int, pair<int, vector<int>>> machine_maps;  // GT mID -> (tier, recipe map types), tier -1 for multiblocks
 FoodNamer namer;
 map<string, string> fluid_names;  // texture-dump's fluids.json
+map<string, string> machine_names;  // texture-dump's recipe_maps.json: GT recipe map -> its name in game
+unordered_map<string, int> icon_of;  // texture-dump's item_icons.json: key -> cell in item_icons.png
+int icon_size = 16, icon_columns = 0;
+string icons_png;
+
+// the icons of the keys a response names, and where they are in the sheet
+json icons_json(const set<int> &named) {
+  json icons = json::object();
+  for (int k : named) {
+    auto f = icon_of.find(keys[k]);
+    // "any damage": the plain damage 0 picture
+    if (f == icon_of.end() && wild[k]) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
+    if (f != icon_of.end()) icons[keys[k]] = f->second;
+  }
+  return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}};
+}
 bool loaded = false;
 
 vector<vector<int>> made_by;     // key -> recipes with it as an output
@@ -180,6 +197,7 @@ Solved solve(const FoodGroup &g) {
       if (tier[rc.type] < 0 || (rc.eut > 0 && tier_for(rc.eut) > tier[rc.type])) continue;
       int worst = 0;
       for (auto &slot : rc.in) {
+        if (slot.alts.empty()) continue;  // an empty grid cell
         int best = INF;
         for (int a : slot.alts) best = min(best, cost_of(s, a));
         worst = max(worst, best);
@@ -205,7 +223,10 @@ json recipe_json(int r, set<int> &named) {
     o.push_back({keys[x.key], x.amount, x.chance});
     named.insert(x.key);
   }
-  return {{"t", types[rc.type]}, {"eut", rc.eut}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
+  json j = {{"t", types[rc.type]}, {"eut", rc.eut}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
+  if (rc.w > 0) j["w"] = rc.w, j["h"] = rc.h;
+  if (auto m = machine_names.find(types[rc.type]); m != machine_names.end()) j["machine"] = m->second;
+  return j;
 }
 
 // the cheapest way to key k: its steps, the recipe, and which alternative each slot uses, then the same for
@@ -234,6 +255,10 @@ void add_tree(const Solved &s, int k, json &nodes, json &jr, set<int> &named, se
   }
   json uses = json::array();
   for (auto &slot : recipes[r].in) {
+    if (slot.alts.empty()) {
+      uses.push_back(nullptr);
+      continue;
+    }
     int pick = slot.alts[0], best = INF;
     for (int a : slot.alts)
       if (cost_of(s, a) < best) best = cost_of(s, a), pick = a;
@@ -241,7 +266,8 @@ void add_tree(const Solved &s, int k, json &nodes, json &jr, set<int> &named, se
   }
   nodes[keys[k]] = {d, r, uses};
   if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
-  for (auto &u : uses) add_tree(s, key_index[u.get<string>()], nodes, jr, named, seen);
+  for (auto &u : uses)
+    if (!u.is_null()) add_tree(s, key_index[u.get<string>()], nodes, jr, named, seen);
 }
 
 // a group's solve for the current snapshot, kept until the next one. call with state_lock held
@@ -271,6 +297,8 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
         Recipe rc;
         rc.type = type_of(e["t"].get<string>());
         rc.eut = e.value("eut", 0);
+        rc.w = e.value("w", 0);
+        rc.h = e.value("h", 0);
         for (auto &slot : e["in"]) {
           Slot s;
           s.count = slot[0].get<int>();
@@ -283,11 +311,22 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     }
     // a bucket fills from any water source, no recipe has that
     if (key_index.count("minecraft:water_bucket:0"))
-      recipes.push_back({type_of("fill"), 0, {{1, {intern("minecraft:bucket:0")}}}, {{intern("minecraft:water_bucket:0"), 1, 10000}}});
+      recipes.push_back({type_of("fill"), 0, 0, 0, {{1, {intern("minecraft:bucket:0")}}}, {{intern("minecraft:water_bucket:0"), 1, 10000}}});
     if (exists(dir / "fluids.json")) {
       // keep the document alive, items() only refers into it
       json fl = json::parse(readFile(dir / "fluids.json"));
       for (auto &[k, v] : fl.items()) fluid_names[k] = v.get<string>();
+    }
+    if (exists(dir / "recipe_maps.json")) {
+      json rm = json::parse(readFile(dir / "recipe_maps.json"));
+      for (auto &[k, v] : rm.items()) machine_names[k] = v.get<string>();
+    }
+    if (exists(dir / "item_icons.json") && exists(dir / "item_icons.png")) {
+      json ic = json::parse(readFile(dir / "item_icons.json"));
+      icon_size = ic["size"].get<int>();
+      icon_columns = ic["columns"].get<int>();
+      for (auto &[k, v] : ic["icons"].items()) icon_of[k] = v.get<int>();
+      icons_png = readFile(dir / "item_icons.png");
     }
     if (exists(dir / "gt_machine_maps.json")) {
       json m = json::parse(readFile(dir / "gt_machine_maps.json"));
@@ -362,6 +401,7 @@ string foods_state_json() {
   }
   json &jn = out["names"] = json::object();
   for (int k : named) jn[keys[k]] = display(k);
+  out["icons"] = icons_json(named);
   // eaten items the dump doesn't know
   for (auto &p : snapshot.players)
     for (auto &e : p.eaten)
@@ -396,12 +436,16 @@ string recipes_search_json(const string &query) {
   }
   sort(hits.begin(), hits.end());
   json out = json::array();
+  set<int> shown;
   for (size_t i = 0; i < hits.size() && i < 60; i++) {
     int k = get<2>(hits[i]);
     out.push_back({{"key", keys[k]}, {"name", display(k)}, {"makes", made_by[k].size()}, {"uses", used_in[k]}});
+    shown.insert(k);
   }
-  return json{{"results", out}, {"total", hits.size()}}.dump();
+  return json{{"results", out}, {"total", hits.size()}, {"icons", icons_json(shown)}}.dump();
 }
+
+const string &recipes_icons_png() { return icons_png; }
 
 string recipes_groups_json() {
   lock_guard<mutex> l(state_lock);
@@ -429,6 +473,7 @@ string recipes_item_json(const string &key, const string &group) {
     const Recipe &rc = recipes[r];
     int worst = 0;
     for (auto &slot : rc.in) {
+      if (slot.alts.empty()) continue;
       int b = INF;
       for (int a : slot.alts) b = min(b, cost_of(*s, a));
       worst = max(worst, b);
@@ -464,8 +509,24 @@ string recipes_item_json(const string &key, const string &group) {
   set<int> seen;
   add_tree(*s, k, nodes, jr, named, seen);
   out["route"] = {{"nodes", nodes}, {"recipes", jr}};
+  // how much of each thing the route starts from the group has ("any damage": all damages together)
+  json have = json::object();
+  if (auto g = snapshot.groups.find(group); g != snapshot.groups.end())
+    for (auto &[key, node] : nodes.items()) {
+      if (node.size() != 1 || node[0].is_null() || node[0].get<int>() != 0) continue;
+      int64_t n = 0;
+      int kk = key_index[key];
+      if (wild[kk]) {
+        string prefix = key.substr(0, key.rfind(':') + 1);
+        for (auto it = g->second.held.lower_bound(prefix); it != g->second.held.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it)
+          n += it->second;
+      } else if (auto h = g->second.held.find(key); h != g->second.held.end()) n = h->second;
+      have[key] = n;
+    }
+  out["have"] = have;
   json &jn = out["names"] = json::object();
   for (int n : named) jn[keys[n]] = display(n);
+  out["icons"] = icons_json(named);
   return out.dump();
 }
 

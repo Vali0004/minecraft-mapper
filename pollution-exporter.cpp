@@ -1692,6 +1692,14 @@ int main(int argc, char **argv) {
       r.body = recipes_html;
       return true;
     }
+    if (target == "/recipes/icons.png" || target == "/foods/icons.png") {
+      if (recipes_icons_png().empty()) return false;
+      r.status = "200 OK";
+      r.ctype = "image/png";
+      r.body = recipes_icons_png();
+      r.headers = "Cache-Control: max-age=3600\r\n";
+      return true;
+    }
     if (target == "/recipes/search.json" || target == "/recipes/item.json" || target == "/recipes/groups.json") {
       static once_flag first;
       call_once(first, [&] { string out; collect_containers(save, out); });
