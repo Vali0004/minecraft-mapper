@@ -13,7 +13,8 @@ public:
   using Collector = std::function<void(std::string &out)>;
   // returns false if it doesn't handle `target`, otherwise fills status ("200 OK"), content type and body
   // `headers` is appended verbatim to the response headers, each line ending in \r\n
-  struct Response { std::string status, ctype, body, headers; };
+  // `query` is filled in for the handler: the request's query string, without the "?"
+  struct Response { std::string status, ctype, body, headers, query; };
   using Handler = std::function<bool(const std::string &target, Response &resp)>;
 
   MetricsServer(const std::string &bind_addr, int port);

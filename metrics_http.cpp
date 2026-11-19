@@ -79,11 +79,14 @@ void MetricsServer::handleClient(int fd) {
   if (sp1 == string::npos || sp2 == string::npos) return;
   string method = req.substr(0, sp1);
   string target = req.substr(sp1 + 1, sp2 - sp1 - 1);
+  Response r;
   size_t q = target.find('?');
-  if (q != string::npos) target.resize(q);
+  if (q != string::npos) {
+    r.query = target.substr(q + 1);
+    target.resize(q);
+  }
 
   string status, ctype, body, extra;
-  Response r;
   bool handled = false;
   // slow clients only hold their own thread, the handlers themselves share state
   unique_lock<mutex> l(lock);

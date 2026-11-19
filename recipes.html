@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recipe Search</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e3e0d8;
+  --accent: #2f6f4f; --accent-soft: #e2efe7; --held: #8a5a00; --held-soft: #f6ead2; --bad: #9b3b32; --bad-soft: #f5e1de;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161614; --panel: #1f1f1c; --text: #ecebe6; --muted: #9c998f; --line: #33322d;
+          --accent: #7cc49b; --accent-soft: #1f3328; --held: #e0b35a; --held-soft: #3a2f18; --bad: #e58b80; --bad-soft: #3a1f1c; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1040px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 18px; margin: 0; overflow-wrap: anywhere; }
+h3 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 22px 0 8px; }
+a { color: var(--accent); }
+.sub { color: var(--muted); margin: 0 0 18px; font-size: 13px; }
+.bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.bar input, .bar select { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
+.bar input { flex: 1; min-width: 200px; }
+.layout { display: grid; grid-template-columns: 300px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
+.results { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.results button { display: flex; width: 100%; gap: 8px; align-items: baseline; text-align: left; padding: 8px 12px; border: 0;
+  border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; cursor: pointer; }
+.results button:last-child { border-bottom: 0; }
+.results button:hover, .results button[aria-current="true"] { background: var(--accent-soft); }
+.results .n { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.results .c { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.empty, .muted { color: var(--muted); font-size: 13px; }
+.empty { padding: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 8px; }
+.key { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+.head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.head .m { font-weight: 600; }
+.badge { border-radius: 999px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.ready { background: var(--accent-soft); color: var(--accent); }
+.missing { background: var(--held-soft); color: var(--held); }
+.nomachine { background: var(--bad-soft); color: var(--bad); }
+.io { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: start; font-size: 14px; }
+@media (max-width: 560px) { .io { grid-template-columns: 1fr; } .io .arrow { display: none; } }
+.io ul { list-style: none; margin: 0; padding: 0; }
+.io li { margin: 2px 0; }
+.arrow { color: var(--muted); padding-top: 2px; }
+.item { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-align: left; text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 2px; }
+.st { font-size: 12px; color: var(--muted); }
+.st.held { color: var(--held); }
+.st.no { color: var(--bad); }
+.or { color: var(--muted); font-size: 12px; }
+.filters { display: flex; gap: 6px; margin-bottom: 8px; }
+.filters button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.filters button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.tree ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--line); }
+.tree > ul { padding-left: 0; border: 0; }
+.tree li { margin: 3px 0; font-size: 14px; }
+.tree summary { cursor: pointer; }
+.via { color: var(--muted); font-size: 12px; }
+.tag { background: var(--held-soft); color: var(--held); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+.note { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recipe Search</h1>
+  <p class="sub">Every crafting, smelting and GregTech recipe in the pack. <a href="../foods/">Food planner</a></p>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Search an item or fluid, e.g. Ethanol" autocomplete="off" autofocus>
+    <select id="group" aria-label="Whose holdings and machines"></select>
+  </div>
+  <div class="layout">
+    <div class="results" id="results"><p class="empty">Type to search.</p></div>
+    <div id="detail"></div>
+  </div>
+  <p class="note">
+    Ready means the team owns a machine for it at that voltage and every ingredient is held or can be made.
+    Steps count the longest chain from what's held; the route picks the fewest steps, not the best yield, and
+    holding one of an ingredient counts as enough. Water and GregTech programmed circuits are free.
+    Recipes from machines outside GregTech, the crafting grid and the furnace (Forestry, Thaumcraft…) aren't included.
+  </p>
+</main>
+<script>
+const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "UEV", "UIV", "UMV", "UXV", "MAX"];
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+let current = null, onlyReady = false, names = {};
+
+function machine(r) {
+  if (r.t === "crafting") return "Crafting";
+  if (r.t === "smelting") return "Furnace";
+  if (r.t === "fill") return "Fill at water";
+  let m = r.t.replace(/^gt\.recipe\./, "").replace(/^gtpp?\.recipe\./, "").replace(/[._]/g, " ");
+  return m.charAt(0).toUpperCase() + m.slice(1);
+}
+const isFluid = k => k.startsWith("fluid:");
+const amount = (k, n) => isFluid(k) ? `${n.toLocaleString()} mB` : `${n}×`;
+const name = k => names[k] || k;
+
+function itemLink(k) {
+  const b = el("button", "item", name(k));
+  b.title = k;
+  b.addEventListener("click", () => open(k));
+  return b;
+}
+function reach(d) {
+  if (d === null || d === undefined) return el("span", "st no", "can't make");
+  if (d === 0) return el("span", "st held", "held");
+  return el("span", "st", `${d} step${d > 1 ? "s" : ""}`);
+}
+
+// search, as you type
+let timer = 0, seq = 0;
+$("q").addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(search, 180); });
+async function search() {
+  const q = $("q").value.trim(), mine = ++seq;
+  if (!q) { $("results").replaceChildren(el("p", "empty", "Type to search.")); return; }
+  const r = await (await fetch("search.json?q=" + encodeURIComponent(q))).json();
+  if (mine !== seq) return;
+  if (!r.results?.length) { $("results").replaceChildren(el("p", "empty", r.error || "No match.")); return; }
+  $("results").replaceChildren(...r.results.map(x => {
+    const b = el("button");
+    b.dataset.key = x.key;
+    b.setAttribute("aria-current", x.key === current);
+    b.append(el("span", "n", x.name), el("span", "c", `${x.makes} make · ${x.uses} use`));
+    b.addEventListener("click", () => open(x.key));
+    return b;
+  }), ...(r.total > r.results.length ? [el("p", "empty", `${r.total - r.results.length} more, narrow the search`)] : []));
+}
+
+// one item: the team's route, then every recipe making it
+async function open(key, push = true) {
+  current = key;
+  if (push) history.replaceState(null, "", "#" + encodeURIComponent(key));
+  for (const b of $("results").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.key === key);
+  $("detail").replaceChildren(el("p", "muted", "Loading…"));
+  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}`)).json();
+  if (current !== key) return;
+  if (r.error) { $("detail").replaceChildren(el("p", "muted", r.error)); return; }
+  names = { ...names, ...r.names };
+  const d = $("detail"), parts = [];
+  const head = el("div", "card");
+  head.append(el("h2", null, name(key)), el("div", "key", key),
+              el("div", "muted", `${r.producers_total} recipe${r.producers_total === 1 ? "" : "s"} make it · used in ${r.uses}`));
+  parts.push(head);
+
+  parts.push(el("h3", null, "Fastest route for " + $("group").selectedOptions[0]?.textContent));
+  const root = r.route.nodes[key];
+  if (!root || root[0] === null) parts.push(el("p", "muted", "Can't be made from what's held, with the machines owned."));
+  else if (root[0] === 0) parts.push(el("p", "muted", "Already held."));
+  else { const t = el("div", "card tree"), ul = el("ul"); ul.append(node(r.route, key, 1, true)); t.append(ul); parts.push(t); }
+
+  parts.push(el("h3", null, "Every recipe making it"));
+  const filters = el("div", "filters");
+  for (const [label, v] of [["All", false], ["Ready now", true]]) {
+    const b = el("button", null, label);
+    b.setAttribute("aria-pressed", onlyReady === v);
+    b.addEventListener("click", () => { onlyReady = v; open(key, false); });
+    filters.append(b);
+  }
+  parts.push(filters);
+  const shown = r.producers.filter(p => !onlyReady || p.state === "ready");
+  if (!shown.length) parts.push(el("p", "muted", onlyReady ? "None ready now." : "Nothing makes it, it's gathered."));
+  for (const p of shown) parts.push(recipeCard(p));
+  if (r.producers.length < r.producers_total) parts.push(el("p", "muted", `Showing ${r.producers.length} of ${r.producers_total}.`));
+  d.replaceChildren(...parts);
+}
+
+function recipeCard(p) {
+  const c = el("div", "card"), h = el("div", "head");
+  const cls = p.state === "ready" ? "ready" : p.state === "no machine" ? "nomachine" : "missing";
+  h.append(el("span", "m", machine(p)));
+  if (p.eut > 0) h.append(el("span", "muted", `${p.eut.toLocaleString()} EU/t · ${TIERS[p.tier] || p.tier}`));
+  h.append(el("span", "badge " + cls, p.state === "ready" ? `ready · ${p.steps} step${p.steps > 1 ? "s" : ""}` : p.state));
+  const io = el("div", "io"), ins = el("ul"), outs = el("ul");
+  for (const s of p.slots) {
+    const li = el("li");
+    const [k0] = s.alts[0];
+    li.append(s.count === 0 ? el("span", "or", "kept · ") : document.createTextNode(amount(k0, s.count) + " "));
+    s.alts.forEach(([k, dist], i) => {
+      if (i) li.append(el("span", "or", " or "));
+      li.append(itemLink(k), " ", reach(dist));
+    });
+    if (s.more > 0) li.append(el("span", "or", ` or ${s.more} more`));
+    ins.append(li);
+  }
+  for (const [k, n, chance] of p.out) {
+    const li = el("li");
+    li.append(amount(k, n) + " ", itemLink(k));
+    if (chance < 10000) li.append(el("span", "or", ` ${chance / 100}%`));
+    outs.append(li);
+  }
+  io.append(ins, el("span", "arrow", "→"), outs);
+  c.append(h, io);
+  return c;
+}
+
+// the route tree, children rendered when opened
+function node(route, key, count, open) {
+  const li = el("li"), n = route.nodes[key];
+  const label = () => { const s = el("span"); if (count > 1) s.append(amount(key, count) + " "); s.append(itemLink(key)); return s; };
+  if (!n || n[0] === null) { li.append(label(), " ", el("span", "st no", "can't make")); return li; }
+  if (n[0] === 0 || n.length < 2) { li.append(label(), " ", el("span", "tag", "held")); if (count === 0) li.append(" ", el("span", "via", "kept")); return li; }
+  if (n[1] === -1) return node(route, n[2][0], count, open);
+  const r = route.recipes[n[1]], d = el("details"), s = el("summary");
+  s.append(label(), " ", el("span", "via", `${machine(r)}${r.tier >= 0 ? ", " + TIERS[r.tier] : ""} · ${n[0]} step${n[0] > 1 ? "s" : ""}${count === 0 ? " · kept" : ""}`));
+  d.append(s);
+  const fill = () => {
+    if (d.children.length > 1) return;
+    const ul = el("ul"), merged = new Map();
+    n[2].forEach((k, i) => merged.set(k, (merged.get(k) ?? 0) + r.in[i]));
+    for (const [k, c] of merged) ul.append(node(route, k, c, false));
+    d.append(ul);
+  };
+  d.addEventListener("toggle", () => d.open && fill());
+  if (open) { d.open = true; fill(); }
+  li.append(d);
+  return li;
+}
+
+// whose holdings: teams, then players in no team
+fetch("groups.json").then(r => r.json()).then(g => {
+  const sel = $("group");
+  const label = k => k.startsWith("player:") ? k.slice(7) : `Team ${k}`;
+  sel.replaceChildren(...g.groups.filter(k => k).sort((a, b) => a.startsWith("player:") - b.startsWith("player:") || a.localeCompare(b))
+    .map(k => { const o = el("option", null, label(k)); o.value = k; return o; }));
+  const saved = store.get("recipes.group");
+  if (saved && g.groups.includes(saved)) sel.value = saved;
+  sel.addEventListener("change", () => { store.set("recipes.group", sel.value); if (current) open(current, false); });
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (h) open(h, false);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Food Planner</title>
+<style>
+:root {
+  --bg: #f6f5f1; --panel: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e3e0d8;
+  --accent: #2f6f4f; --accent-soft: #e2efe7; --held: #8a5a00; --held-soft: #f6ead2;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161614; --panel: #1f1f1c; --text: #ecebe6; --muted: #9c998f; --line: #33322d;
+          --accent: #7cc49b; --accent-soft: #1f3328; --held: #e0b35a; --held-soft: #3a2f18; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+.players { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.players button { border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 999px;
+  padding: 5px 12px; font: inherit; font-size: 14px; cursor: pointer; }
+.players button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.stat b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.stat span { color: var(--muted); font-size: 13px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--muted); font: inherit;
+  padding: 8px 10px; cursor: pointer; }
+.tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+.tools { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.tools input, .tools select { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--text); }
+.tools input { flex: 1; min-width: 180px; }
+.food { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 6px; }
+.food > summary { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; cursor: pointer; list-style: none; }
+.food > summary::-webkit-details-marker { display: none; }
+.food > summary .n { flex: 1; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.food > summary .m { color: var(--muted); font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.steps { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 1px 8px; font-size: 12px; white-space: nowrap; }
+.tree { padding: 4px 12px 12px 14px; font-size: 14px; }
+.tree ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--line); }
+.tree > ul { padding-left: 0; border: 0; }
+.tree li { margin: 3px 0; }
+.tree details > summary { cursor: pointer; }
+.via { color: var(--muted); font-size: 12px; }
+.held { background: var(--held-soft); color: var(--held); border-radius: 4px; padding: 0 5px; font-size: 12px; }
+.plain { list-style: none; padding: 0; margin: 0; columns: 2 260px; }
+.plain li { padding: 3px 0; break-inside: avoid; }
+.empty, .note { color: var(--muted); font-size: 13px; }
+.note { margin-top: 28px; border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Food Planner</h1>
+  <p class="sub" id="sub">Loading…</p>
+  <div class="players" id="players"></div>
+  <div class="stats" id="stats"></div>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="next" aria-selected="true">Craftable, not eaten</button>
+    <button role="tab" data-tab="eaten" aria-selected="false">Eaten</button>
+  </div>
+  <div class="tools" id="tools">
+    <input id="q" type="search" placeholder="Search foods" autocomplete="off">
+    <select id="sort">
+      <option value="steps">Fewest steps</option>
+      <option value="hunger">Most hunger</option>
+      <option value="name">Name</option>
+    </select>
+  </div>
+  <div id="list"></div>
+  <p class="note">
+    Craftable means it can be made from what the player's team holds right now: containers in the team's claimed
+    chunks and every member's inventory, ender chest and backpacks, using crafting, smelting and GregTech recipes
+    the team has a machine of the right voltage for. Holding one of an ingredient counts as enough, amounts are not
+    checked. Steps is the longest chain of recipes to it, everything along a chain counts once. Water is free.
+    Players in no team only have their own inventory.
+  </p>
+</main>
+<script>
+const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "UEV", "UIV", "UMV", "UXV", "MAX"];
+let S = null, player = null, tab = "next";
+const $ = id => document.getElementById(id);
+const name = k => S.names[k] || k;
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+
+function machine(r) {
+  if (r.t === "crafting") return "Crafting";
+  if (r.t === "smelting") return "Furnace";
+  if (r.t === "fill") return "Fill at water";
+  let m = r.t.replace(/^gt\.recipe\./, "").replace(/^gtpp?\.recipe\./, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[._]/g, " ");
+  m = m.charAt(0).toUpperCase() + m.slice(1);
+  return r.tier >= 0 ? `${m}, ${TIERS[r.tier] || r.tier}` : m;
+}
+
+// one ingredient line, its own recipe shown when opened
+function node(group, key, count) {
+  const li = el("li");
+  const n = group.nodes[key];
+  const label = (count > 1 ? count + "× " : count === 0 ? "" : "") + name(key);
+  if (!n || n[0] === 0 || n.length < 2) {
+    li.append(label + " ");
+    li.append(el("span", "held", n && n[0] === 0 ? "held" : "?"));
+    if (count === 0) li.append(" ", el("span", "via", "not used up"));
+    return li;
+  }
+  if (n[1] === -1) return node(group, n[2][0], count);  // any damage, made as this one
+  const d = el("details"), s = el("summary");
+  const r = S.recipes[n[1]];
+  s.append(label + " ", el("span", "via", `${machine(r)} · ${n[0]} step${n[0] > 1 ? "s" : ""}` + (count === 0 ? " · not used up" : "")));
+  d.append(s);
+  d.addEventListener("toggle", () => { if (d.open && d.children.length === 1) d.append(recipe(group, n)); });
+  li.append(d);
+  return li;
+}
+
+function recipe(group, n) {
+  const r = S.recipes[n[1]], ul = el("ul");
+  if (r.out.length > 1) ul.append(el("li", "via", "also makes " + r.out.slice(1).map(o => name(o[0])).join(", ")));
+  // the same ingredient in several slots is one line, its counts summed ("8× Copper Wire")
+  const merged = new Map();
+  n[2].forEach((k, i) => merged.set(k, (merged.get(k) ?? 0) + r.in[i]));
+  for (const [k, count] of merged) ul.append(node(group, k, count));
+  return ul;
+}
+
+function render() {
+  const p = S.players.find(x => x.name === player);
+  const group = S.groups[p.group] || { craftable: {}, nodes: {} };
+  const eaten = new Set(p.eaten);
+  const foodKeys = Object.keys(S.foods);
+  const craftable = Object.keys(group.craftable);
+  const next = craftable.filter(k => !eaten.has(k));
+  $("stats").replaceChildren(...[
+    [eaten.size, "foods eaten"], [next.length, "craftable now, not eaten"],
+    [craftable.length, "craftable now in all"], [foodKeys.length, "foods in the pack"],
+  ].map(([v, l]) => { const d = el("div", "stat"); d.append(el("b", null, v), el("span", null, l)); return d; }));
+
+  const q = $("q").value.trim().toLowerCase(), sort = $("sort").value;
+  const list = $("list");
+  if (tab === "eaten") {
+    const ul = el("ul", "plain");
+    [...eaten].map(k => [k, name(k)]).filter(([, n]) => !q || n.toLowerCase().includes(q)).sort((a, b) => a[1].localeCompare(b[1]))
+      .forEach(([k, n]) => ul.append(el("li", null, n)));
+    list.replaceChildren(ul.children.length ? ul : el("p", "empty", "Nothing here."));
+    return;
+  }
+  let rows = next.map(k => ({ k, n: name(k), f: S.foods[k], s: group.craftable[k] })).filter(x => !q || x.n.toLowerCase().includes(q));
+  rows.sort(sort === "name" ? (a, b) => a.n.localeCompare(b.n)
+          : sort === "hunger" ? (a, b) => b.f.hunger - a.f.hunger || a.s - b.s
+          : (a, b) => a.s - b.s || b.f.hunger - a.f.hunger);
+  const frag = document.createDocumentFragment();
+  for (const x of rows) {
+    const d = el("details", "food"), s = el("summary");
+    s.append(el("span", "n", x.n), el("span", "m", `${x.f.hunger} hunger · ${(x.f.saturation).toFixed(2)} sat`),
+             el("span", "steps", x.s === 0 ? "held" : `${x.s} step${x.s > 1 ? "s" : ""}`));
+    d.append(s);
+    d.addEventListener("toggle", () => {
+      if (!d.open || d.children.length > 1) return;
+      const t = el("div", "tree"), ul = el("ul");
+      const n = group.nodes[x.k];
+      if (x.s === 0) ul.append(el("li", null, "In the team's storage already."));
+      else ul.append(...recipe(group, n.length === 3 && n[1] === -1 ? group.nodes[n[2][0]] : n).children);
+      const r = S.recipes[(n[1] === -1 ? group.nodes[n[2][0]] : n)?.[1]];
+      if (r) t.append(el("div", "via", "Last step: " + machine(r)));
+      t.append(ul);
+      d.append(t);
+    });
+    frag.append(d);
+  }
+  list.replaceChildren(rows.length ? frag : el("p", "empty", q ? "No match." : "Nothing craftable that hasn't been eaten."));
+}
+
+function pick(name) {
+  player = name;
+  for (const b of $("players").children) b.setAttribute("aria-pressed", b.dataset.p === name);
+  try { localStorage.setItem("foods.player", name); } catch (e) {}
+  render();
+}
+
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+  $("sort").hidden = tab === "eaten";
+  render();
+}));
+$("q").addEventListener("input", () => player && render());
+$("sort").addEventListener("change", () => player && render());
+
+fetch("state.json").then(r => r.json()).then(s => {
+  if (s.error) { $("sub").textContent = s.error; return; }
+  S = s;
+  S.players.sort((a, b) => b.eaten.length - a.eaten.length || a.name.localeCompare(b.name));
+  $("sub").textContent = "From the world save, " + new Date(S.generated * 1000).toLocaleString();
+  $("players").replaceChildren(...S.players.map(p => {
+    const b = el("button", null, p.team ? `${p.name} · ${p.team}` : p.name);
+    b.dataset.p = p.name;
+    b.addEventListener("click", () => pick(p.name));
+    return b;
+  }));
+  let saved = null;
+  try { saved = localStorage.getItem("foods.player"); } catch (e) {}
+  if (S.players.length) pick(S.players.some(p => p.name === saved) ? saved : S.players[0].name);
+  else $("sub").textContent = "No players yet.";
+}).catch(e => { $("sub").textContent = "Couldn't load the data: " + e; });
+</script>
+</body>
+</html>

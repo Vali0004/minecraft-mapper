@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "utils.h"
+#include "foods.h"
 #include "metrics_http.h"
 #include "nbt.h"
 #include "nbt_tree.h"
@@ -1327,6 +1328,7 @@ void collect_containers(const path savepath, string &out) {
     const auto names = load_usercache(savepath);
     // (team, player, where, container, item) -> count. container is the item holding it (a backpack, /dev/null), "" when carried
     map<tuple<string, string, string, string, ItemKey>, int64_t> held;
+    vector<FoodPlayer> food_players;
     map<pair<string, string>, int64_t> inventory_bytes;  // (player, inventory|ender_chest|galacticraft) -> NBT size
     map<string, int64_t> item_max;  // player -> their largest single item's NBT size
     path pd = savepath / "playerdata";
@@ -1346,6 +1348,19 @@ void collect_containers(const path savepath, string &out) {
           continue;
         }
         set<string> player_backpacks_seen;
+        // Spice of Life's full history, what /foodlist counts (its History list is only the recent window)
+        {
+          FoodPlayer fp{n->second, team, team.empty() ? "player:" + n->second : team, {}};
+          const NbtTag *h = p.get("ForgeData");
+          for (const char *k : {"PlayerPersisted", "SpiceOfLifeHistory", "FullHistory", "Foods"}) h = h ? h->get(k) : nullptr;
+          if (h)
+            for (auto &f : h->list) {
+              int id = (int)f.num("id", -1);
+              auto name = ids.find(id);
+              if (name != ids.end()) fp.eaten.insert(name->second + ":" + to_string((int)f.num("Damage")));
+            }
+          food_players.push_back(move(fp));
+        }
         static const struct { const char *list, *where; } lists[] = {
           { "Inventory", "inventory" }, { "EnderItems", "ender_chest" }, { "ExtendedInventoryGC", "galacticraft" },
         };
@@ -1372,6 +1387,29 @@ void collect_containers(const path savepath, string &out) {
           inventory_bytes[{n->second, li.where}] = nbt_payload_size(*l);
         }
       }
+    }
+    // the food planner's snapshot: per team its claimed containers, members' items and machines
+    if (foods_loaded()) {
+      FoodSnapshot fs;
+      auto key = [&](const ItemKey &k) {
+        auto n = ids.find(k.id);
+        return n == ids.end() ? string() : n->second + ":" + to_string(k.damage);
+      };
+      for (auto &[tk, its] : items)
+        for (auto &[k, c] : its)
+          if (string s = key(k); !s.empty()) fs.groups[tk.first].held[s] += c;
+      for (auto &[team, dim, m] : machines) fs.groups[team].machines.push_back(m.id);
+      for (auto &[k, c] : held) {
+        auto &[team, player, where, container, item] = k;
+        if (string s = key(item); !s.empty()) fs.groups[team.empty() ? "player:" + player : team].held[s] += c;
+      }
+      for (auto &fp : food_players) fs.groups[fp.group];
+      out += "# HELP foods_eaten_unique Distinct foods a player has eaten, what Spice of Life's /foodlist size counts\n# TYPE foods_eaten_unique gauge\n";
+      for (auto &fp : food_players)
+        fmt(out, "foods_eaten_unique{player=\"%s\",team=\"%s\"} %zu\n", esc(fp.name).c_str(), esc(fp.team).c_str(), fp.eaten.size());
+      fmt(out, "# HELP foods_known_total Foods in the modpack, by AppleCore\n# TYPE foods_known_total gauge\nfoods_known_total %zu\n", foods_total());
+      fs.players = move(food_players);
+      foods_update(move(fs));
     }
     out += "# HELP player_inventory_nbt_bytes Serialized size of a player's inventory, ender chest or Galacticraft slots, each is one packet to the client\n# TYPE player_inventory_nbt_bytes gauge\n";
     for (auto &[k, b] : inventory_bytes)
@@ -1501,6 +1539,16 @@ static void load_dump(const path &dir) {
       coke_recipes[{r["input"]["item"].get<string>(), r["input"]["damage"].get<int>()}] = c;
     }
   });
+  if (exists(dir / "foods.json") && exists(dir / "recipes.json"))
+    foods_load(dir, [](const string &key) {
+      size_t c = key.rfind(':');
+      auto names = item_names.find(key.substr(0, c));
+      if (names != item_names.end()) {
+        auto n = names->second.find(atoi(key.c_str() + c + 1));
+        if (n != names->second.end()) return n->second;
+      }
+      return key;
+    });
   printf("loaded %zu item names, %zu GregTech machines, %zu coke oven recipes from %s\n",
          item_names.size(), gt_machine_names.size(), coke_recipes.size(), dir.c_str());
 }
@@ -1508,7 +1556,8 @@ static void load_dump(const path &dir) {
 static void usage(const char *argv0) {
   printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>] [-n <items.json>] [-d <texture-dump dir>]\n"
          "  -n  texture-dump's items.json, gives container_items real names (\"Iron Ingot\")\n"
-         "  -d  a texture-dump directory: items.json, gt_machines.json, coke_oven.json\n"
+         "  -d  a texture-dump directory: items.json, gt_machines.json, coke_oven.json, and foods.json, recipes.json,\n"
+         "      gt_machine_maps.json for the food planner at /foods/\n"
          "  -l  serve prometheus metrics over http (default :9150)\n"
          "  -o  write a node_exporter textfile every 10s. with -o alone there is no http server,\n"
          "      with both -o and -l it does both\n", argv0);
@@ -1594,6 +1643,75 @@ int main(int argc, char **argv) {
   if (prom_out) thread(write_textfile).detach();
   MetricsServer server(listen_addr, port);
   server.addCollector([save](string &out) { collect_all(save, out); });
+  // the food planner page and its data
+  server.addHandler([save](const string &target, MetricsServer::Response &r) {
+    if (target == "/foods") {
+      r.status = "301 Moved Permanently";
+      r.ctype = "text/plain";
+      r.headers = "Location: /foods/\r\n";
+      return true;
+    }
+    if (target == "/foods/" || target == "/foods/index.html") {
+      r.status = "200 OK";
+      r.ctype = "text/html; charset=utf-8";
+      r.body = foods_html;
+      return true;
+    }
+    // the recipe search
+    auto param = [&](const char *name) {
+      // a value of the query string, %XX and + decoded
+      string want = string(name) + "=";
+      for (size_t at = 0; at <= r.query.size();) {
+        size_t end = r.query.find('&', at);
+        if (end == string::npos) end = r.query.size();
+        if (r.query.compare(at, want.size(), want) == 0) {
+          string v;
+          for (size_t i = at + want.size(); i < end; i++) {
+            if (r.query[i] == '+') v += ' ';
+            else if (r.query[i] == '%' && i + 2 < end + 1 && isxdigit(r.query[i + 1]) && isxdigit(r.query[i + 2])) {
+              v += (char)stoi(r.query.substr(i + 1, 2), nullptr, 16);
+              i += 2;
+            } else v += r.query[i];
+          }
+          return v;
+        }
+        at = end + 1;
+      }
+      return string();
+    };
+    if (target == "/recipes") {
+      r.status = "301 Moved Permanently";
+      r.ctype = "text/plain";
+      r.headers = "Location: /recipes/\r\n";
+      return true;
+    }
+    if (target == "/recipes/" || target == "/recipes/index.html") {
+      r.status = "200 OK";
+      r.ctype = "text/html; charset=utf-8";
+      r.body = recipes_html;
+      return true;
+    }
+    if (target == "/recipes/search.json" || target == "/recipes/item.json" || target == "/recipes/groups.json") {
+      static once_flag first;
+      call_once(first, [&] { string out; collect_containers(save, out); });
+      r.status = "200 OK";
+      r.ctype = "application/json";
+      r.body = target == "/recipes/search.json" ? recipes_search_json(param("q"))
+             : target == "/recipes/groups.json" ? recipes_groups_json()
+             : recipes_item_json(param("key"), param("group"));
+      return true;
+    }
+    if (target == "/foods/state.json") {
+      // a page opened before any scrape: collect once so there's a snapshot
+      static once_flag first;
+      call_once(first, [&] { string out; collect_containers(save, out); });
+      r.status = "200 OK";
+      r.ctype = "application/json";
+      r.body = foods_state_json();
+      return true;
+    }
+    return false;
+  });
   server.serve();
   return 0;
 }

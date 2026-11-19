@@ -32,6 +32,8 @@ import org.lwjgl.opengl.GL11;
 public class TextureDump {
   static final int ICON = 16, COLUMNS = 64, TOP = 1;
   boolean done = false;
+  // every named item stack dumpItems saw, foods are picked from these
+  final List<Object> allStacks = new ArrayList<>();
   int ticks = 0;
 
   @Mod.EventHandler
@@ -185,8 +187,10 @@ public class TextureDump {
           int damage = (Integer) call(stack, "func_77960_j", "getItemDamage");
           String display = (String) call(stack, "func_82833_r", "getDisplayName");
           // Bartworks names materials it doesn't have "_NULL"
-          if (display != null && !display.trim().isEmpty() && !display.endsWith(".name") && !display.contains("_NULL") && !byDamage.containsKey(damage))
+          if (display != null && !display.trim().isEmpty() && !display.endsWith(".name") && !display.contains("_NULL") && !byDamage.containsKey(damage)) {
             byDamage.put(damage, display);
+            allStacks.add(stack);
+          }
         } catch (Throwable t) {}
       }
       if (byDamage.isEmpty()) continue;
@@ -206,12 +210,39 @@ public class TextureDump {
       wr.write(json.toString());
     }
     System.out.println("[texturedump] wrote " + names + " names of " + items + " items");
-    dumpGtMachines(dir);
+    dumpGtMachines(dir, nameOf, registry);
     dumpCokeOven(dir, nameOf, registry);
+    dumpFoods(dir, nameOf, registry);
+    dumpFluids(dir);
+  }
+
+  // texture-dump/fluids.json: fluid registry name -> its name in game ("bioethanol" is "Ethanol")
+  void dumpFluids(File dir) throws Exception {
+    Class<?> fr = Class.forName("net.minecraftforge.fluids.FluidRegistry");
+    Map<?, ?> fluids = (Map<?, ?>) fr.getMethod("getRegisteredFluids").invoke(null);
+    Class<?> fsc = Class.forName("net.minecraftforge.fluids.FluidStack"), fc = Class.forName("net.minecraftforge.fluids.Fluid");
+    StringBuilder json = new StringBuilder("{\n");
+    int n = 0;
+    for (Map.Entry<?, ?> e : fluids.entrySet()) {
+      String name = null;
+      try {
+        Object stack = fsc.getConstructor(fc, int.class).newInstance(e.getValue(), 1000);
+        name = (String) fc.getMethod("getLocalizedName", fsc).invoke(e.getValue(), stack);
+      } catch (Throwable t) {}
+      if (name == null) try { name = (String) fc.getMethod("getLocalizedName").invoke(e.getValue()); } catch (Throwable t) {}
+      if (name == null || name.isEmpty()) continue;
+      if (n++ > 0) json.append(",\n");
+      json.append("  \"").append(escape(String.valueOf(e.getKey()))).append("\":\"").append(escape(name)).append("\"");
+    }
+    json.append("\n}\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "fluids.json")), StandardCharsets.UTF_8)) {
+      wr.write(json.toString());
+    }
+    System.out.println("[texturedump] wrote " + n + " fluid names");
   }
 
   // texture-dump/gt_machines.json: GregTech meta tile entity id (a machine's "mID") -> display name
-  void dumpGtMachines(File dir) throws Exception {
+  void dumpGtMachines(File dir, Method nameOf, Object itemRegistry) throws Exception {
     Object[] mtes;
     try {
       mtes = (Object[]) Class.forName("gregtech.api.GregTechAPI").getField("METATILEENTITIES").get(null);
@@ -235,6 +266,40 @@ public class TextureDump {
       wr.write(json.toString());
     }
     System.out.println("[texturedump] wrote " + n + " GregTech machine names");
+
+    // texture-dump/gt_machine_maps.json: mID -> the recipe maps it runs and its voltage tier (-1 for multiblocks,
+    // whose voltage depends on their hatches), so a team's machines say which GT recipes it can run
+    StringBuilder maps = new StringBuilder("{\n");
+    int m = 0;
+    Class<?> workable = null;
+    try { workable = Class.forName("gregtech.api.interfaces.tileentity.RecipeMapWorkable"); } catch (Throwable t) {}
+    for (int id = 0; workable != null && id < mtes.length; id++) {
+      Object mte = mtes[id];
+      if (mte == null || !workable.isInstance(mte)) continue;
+      List<String> names = new ArrayList<>();
+      try {
+        for (Object map : (java.util.Collection<?>) workable.getMethod("getAvailableRecipeMaps").invoke(mte))
+          if (map != null) names.add((String) map.getClass().getField("unlocalizedName").get(map));
+      } catch (Throwable t) {}
+      if (names.isEmpty()) {
+        try {
+          Object map = workable.getMethod("getRecipeMap").invoke(mte);
+          if (map != null) names.add((String) map.getClass().getField("unlocalizedName").get(map));
+        } catch (Throwable t) {}
+      }
+      if (names.isEmpty()) continue;
+      int tier = -1;
+      try { tier = ((Number) mte.getClass().getField("mTier").get(mte)).intValue(); } catch (Throwable t) {}
+      if (m++ > 0) maps.append(",\n");
+      maps.append("  \"").append(id).append("\":{\"tier\":").append(tier).append(",\"maps\":[");
+      for (int i = 0; i < names.size(); i++) maps.append(i > 0 ? "," : "").append("\"").append(escape(names.get(i))).append("\"");
+      maps.append("]}");
+    }
+    maps.append("\n}\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "gt_machine_maps.json")), StandardCharsets.UTF_8)) {
+      wr.write(maps.toString());
+    }
+    System.out.println("[texturedump] wrote recipe maps of " + m + " GregTech machines");
   }
 
   // texture-dump/coke_oven.json: Railcraft coke oven recipes. a coke oven only saves how far it is, how long
@@ -275,6 +340,233 @@ public class TextureDump {
       wr.write(json.toString());
     }
     System.out.println("[texturedump] wrote " + n + " coke oven recipes");
+  }
+
+  // one recipe: what it's made in ("crafting", "smelting", or a GT recipe map's name), its EU/t for GT, its
+  // ingredient slots (each a list of alternatives, ore dictionary entries give many) and outputs
+  static class Recipe {
+    String type;
+    int eut;
+    final List<List<String>> in = new ArrayList<>();  // each alternative: "mod:name:damage", "fluid:name", damage 32767 is any
+    final List<int[]> inMeta = new ArrayList<>();    // per slot: count (0 for not consumed: tools, GT circuits and molds), fluid mB
+    final List<String> out = new ArrayList<>();
+    final List<int[]> outMeta = new ArrayList<>();   // count or mB, chance in 1/10000
+  }
+
+  String key(Object stack, Method nameOf, Object itemRegistry) throws Exception {
+    Object item = call(stack, "func_77973_b", "getItem");
+    if (item == null) return null;
+    return nameOf.invoke(itemRegistry, item) + ":" + call(stack, "func_77960_j", "getItemDamage");
+  }
+
+  // a crafting ingredient: a stack, a list of them (ore dictionary), or null (an empty slot)
+  boolean addSlot(Recipe r, Object ing, Method nameOf, Object itemRegistry) throws Exception {
+    if (ing == null) return true;
+    List<String> alts = new ArrayList<>();
+    Object first = null;
+    if (ing instanceof List) {
+      for (Object o : (List<?>) ing) {
+        if (o == null) continue;
+        String k = key(o, nameOf, itemRegistry);
+        if (k != null) { alts.add(k); if (first == null) first = o; }
+      }
+    } else {
+      String k = key(ing, nameOf, itemRegistry);
+      if (k != null) { alts.add(k); first = ing; }
+    }
+    // an ore dictionary entry nothing is registered for: the recipe can't be made
+    if (alts.isEmpty()) return false;
+    // HarvestCraft's cutting board, pot, juicer... come back from the crafting grid: a tool, not used up
+    int count = 1;
+    try {
+      Object item = call(first, "func_77973_b", "getItem");
+      Object back = item.getClass().getMethod("getContainerItem", Class.forName("net.minecraft.item.ItemStack")).invoke(item, first);
+      if (back != null && call(back, "func_77973_b", "getItem") == item) count = 0;
+    } catch (Throwable t) {}
+    r.in.add(alts);
+    r.inMeta.add(new int[] { count });
+    return true;
+  }
+
+  // texture-dump/foods.json: every food (by AppleCore, which knows what Spice of Life counts) with its hunger
+  // and saturation, and texture-dump/recipes.json: every crafting, smelting and GregTech recipe that leads to
+  // a food, followed back from the foods through their ingredients
+  void dumpFoods(File dir, Method nameOf, Object itemRegistry) throws Exception {
+    Object accessor;
+    Method isFood, values;
+    try {
+      Class<?> api = Class.forName("squeek.applecore.api.AppleCoreAPI");
+      accessor = api.getField("accessor").get(null);
+      Class<?> stackClass = Class.forName("net.minecraft.item.ItemStack");
+      isFood = accessor.getClass().getMethod("isFood", stackClass);
+      values = accessor.getClass().getMethod("getUnmodifiedFoodValues", stackClass);
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no AppleCore, skipping foods.json");
+      return;
+    }
+    StringBuilder foods = new StringBuilder("{\n");
+    java.util.Set<String> foodKeys = new java.util.LinkedHashSet<>();
+    for (Object stack : allStacks) {
+      try {
+        if (!(Boolean) isFood.invoke(accessor, stack)) continue;
+        String k = key(stack, nameOf, itemRegistry);
+        if (k == null || !foodKeys.add(k)) continue;
+        Object v = values.invoke(accessor, stack);
+        int hunger = v.getClass().getField("hunger").getInt(v);
+        float sat = v.getClass().getField("saturationModifier").getFloat(v);
+        String display = (String) call(stack, "func_82833_r", "getDisplayName");
+        if (foodKeys.size() > 1) foods.append(",\n");
+        foods.append("  \"").append(escape(k)).append("\":{\"name\":\"").append(escape(display)).append("\",\"hunger\":").append(hunger)
+             .append(",\"saturation\":").append(sat).append("}");
+      } catch (Throwable t) {}
+    }
+    foods.append("\n}\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(new File(dir, "foods.json")), StandardCharsets.UTF_8)) {
+      wr.write(foods.toString());
+    }
+    System.out.println("[texturedump] wrote " + foodKeys.size() + " foods");
+
+    List<Recipe> all = new ArrayList<>();
+    int skipped = 0;
+    // crafting table
+    Object cm = callStatic(Class.forName("net.minecraft.item.crafting.CraftingManager"), "func_77594_a", "getInstance");
+    Class<?> shaped = Class.forName("net.minecraft.item.crafting.ShapedRecipes"), shapeless = Class.forName("net.minecraft.item.crafting.ShapelessRecipes");
+    for (Object ir : (List<?>) call(cm, "func_77592_b", "getRecipeList")) {
+      try {
+        Object out = call(ir, "func_77571_b", "getRecipeOutput");
+        if (out == null) continue;
+        Recipe r = new Recipe();
+        r.type = "crafting";
+        Iterable<?> ings = null;
+        if (shaped.isInstance(ir)) ings = java.util.Arrays.asList((Object[]) get(ir, "field_77574_d", "recipeItems"));
+        else if (shapeless.isInstance(ir)) ings = (List<?>) get(ir, "field_77579_b", "recipeItems");
+        else {
+          // forge's ore recipes and everything built on them (most of GregTech's and HarvestCraft's)
+          Object in = ir.getClass().getMethod("getInput").invoke(ir);
+          ings = in instanceof Object[] ? java.util.Arrays.asList((Object[]) in) : (List<?>) in;
+        }
+        boolean ok = true;
+        for (Object ing : ings) ok &= addSlot(r, ing, nameOf, itemRegistry);
+        if (!ok || r.in.isEmpty()) continue;
+        r.out.add(key(out, nameOf, itemRegistry));
+        r.outMeta.add(new int[] { (Integer) get(out, "field_77994_a", "stackSize"), 10000 });
+        all.add(r);
+      } catch (Throwable t) { skipped++; }
+    }
+    // furnace
+    Object fr = callStatic(Class.forName("net.minecraft.item.crafting.FurnaceRecipes"), "func_77602_a", "smelting");
+    for (Map.Entry<?, ?> e : ((Map<?, ?>) call(fr, "func_77599_b", "getSmeltingList")).entrySet()) {
+      try {
+        Recipe r = new Recipe();
+        r.type = "smelting";
+        if (!addSlot(r, e.getKey(), nameOf, itemRegistry)) continue;
+        r.out.add(key(e.getValue(), nameOf, itemRegistry));
+        r.outMeta.add(new int[] { (Integer) get(e.getValue(), "field_77994_a", "stackSize"), 10000 });
+        all.add(r);
+      } catch (Throwable t) { skipped++; }
+    }
+    // GregTech recipe maps
+    try {
+      Map<?, ?> maps = (Map<?, ?>) Class.forName("gregtech.api.recipe.RecipeMap").getField("ALL_RECIPE_MAPS").get(null);
+      for (Object map : maps.values()) {
+        String mapName = (String) map.getClass().getField("unlocalizedName").get(map);
+        for (Object g : (java.util.Collection<?>) map.getClass().getMethod("getAllRecipes").invoke(map)) {
+          try {
+            Class<?> gc = g.getClass();
+            if (gc.getField("mFakeRecipe").getBoolean(g) || !gc.getField("mEnabled").getBoolean(g)) continue;
+            Recipe r = new Recipe();
+            r.type = mapName;
+            r.eut = gc.getField("mEUt").getInt(g);
+            boolean ok = true;
+            for (Object st : (Object[]) gc.getField("mInputs").get(g)) {
+              if (st == null) continue;
+              String k = key(st, nameOf, itemRegistry);
+              if (k == null) { ok = false; break; }
+              r.in.add(java.util.Collections.singletonList(k));
+              r.inMeta.add(new int[] { (Integer) get(st, "field_77994_a", "stackSize") });
+            }
+            Object[] fin = (Object[]) gc.getField("mFluidInputs").get(g);
+            for (int i = 0; fin != null && i < fin.length; i++) {
+              if (fin[i] == null) continue;
+              Object f = fin[i].getClass().getMethod("getFluid").invoke(fin[i]);
+              r.in.add(java.util.Collections.singletonList("fluid:" + f.getClass().getMethod("getName").invoke(f)));
+              r.inMeta.add(new int[] { fin[i].getClass().getField("amount").getInt(fin[i]) });
+            }
+            if (!ok || r.in.isEmpty()) continue;
+            Object[] outs = (Object[]) gc.getField("mOutputs").get(g);
+            int[] chances = (int[]) gc.getField("mChances").get(g);
+            for (int i = 0; outs != null && i < outs.length; i++) {
+              if (outs[i] == null) continue;
+              String k = key(outs[i], nameOf, itemRegistry);
+              if (k == null) continue;
+              r.out.add(k);
+              r.outMeta.add(new int[] { (Integer) get(outs[i], "field_77994_a", "stackSize"), chances != null && i < chances.length ? chances[i] : 10000 });
+            }
+            Object[] fout = (Object[]) gc.getField("mFluidOutputs").get(g);
+            for (int i = 0; fout != null && i < fout.length; i++) {
+              if (fout[i] == null) continue;
+              Object f = fout[i].getClass().getMethod("getFluid").invoke(fout[i]);
+              r.out.add("fluid:" + f.getClass().getMethod("getName").invoke(f));
+              r.outMeta.add(new int[] { fout[i].getClass().getField("amount").getInt(fout[i]), 10000 });
+            }
+            if (!r.out.isEmpty()) all.add(r);
+          } catch (Throwable t) { skipped++; }
+        }
+      }
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no GregTech recipe maps");
+    }
+
+    // keep what leads to a food: start from the foods, take every recipe making something needed, need its
+    // ingredients, repeat. an output matches a needed "name:damage" or a needed "name:32767" (any damage)
+    Map<String, List<Recipe>> byOut = new HashMap<>();
+    for (Recipe r : all)
+      for (String o : r.out) {
+        byOut.computeIfAbsent(o, x -> new ArrayList<>()).add(r);
+        int c = o.lastIndexOf(':');
+        if (!o.startsWith("fluid:")) byOut.computeIfAbsent(o.substring(0, c) + ":32767", x -> new ArrayList<>()).add(r);
+      }
+    java.util.Set<String> need = new java.util.HashSet<>(foodKeys);
+    java.util.Set<Recipe> keep = new java.util.LinkedHashSet<>();
+    java.util.ArrayDeque<String> work = new java.util.ArrayDeque<>(foodKeys);
+    while (!work.isEmpty()) {
+      List<Recipe> rs = byOut.get(work.poll());
+      if (rs == null) continue;
+      for (Recipe r : rs) {
+        if (!keep.add(r)) continue;
+        for (List<String> slot : r.in)
+          for (String k : slot)
+            if (need.add(k)) work.add(k);
+      }
+    }
+    writeRecipes(new File(dir, "recipes.json"), keep);
+    // everything, unfiltered, for looking things up (what makes ethanol?)
+    writeRecipes(new File(dir, "all_recipes.json"), all);
+    System.out.println("[texturedump] wrote " + keep.size() + " of " + all.size() + " recipes leading to food (" + need.size() + " items), " + skipped + " unreadable");
+  }
+
+  void writeRecipes(File file, Iterable<Recipe> recipes) throws Exception {
+    StringBuilder json = new StringBuilder("[\n");
+    int n = 0;
+    for (Recipe r : recipes) {
+      if (n++ > 0) json.append(",\n");
+      json.append("{\"t\":\"").append(escape(r.type)).append("\"");
+      if (r.eut != 0) json.append(",\"eut\":").append(r.eut);
+      json.append(",\"in\":[");
+      for (int i = 0; i < r.in.size(); i++) {
+        json.append(i > 0 ? "," : "").append("[").append(r.inMeta.get(i)[0]);
+        for (String k : r.in.get(i)) json.append(",\"").append(escape(k)).append("\"");
+        json.append("]");
+      }
+      json.append("],\"out\":[");
+      for (int i = 0; i < r.out.size(); i++)
+        json.append(i > 0 ? "," : "").append("[\"").append(escape(r.out.get(i))).append("\",").append(r.outMeta.get(i)[0]).append(",").append(r.outMeta.get(i)[1]).append("]");
+      json.append("]}");
+    }
+    json.append("\n]\n");
+    try (Writer wr = new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8)) {
+      wr.write(json.toString());
+    }
   }
 
   // {"item":"mod:name","damage":n,"count":n}, damage 32767 means any
