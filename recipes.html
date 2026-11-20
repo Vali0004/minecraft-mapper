@@ -436,6 +436,7 @@ function howTo(r, key, qty) {
     if (r.replaceable && k in r.replaceable) {
       const o = el("div", "ct");
       if (r.replaceable[k] === "gathered") o.append(el("span", "muted", "gathered"));
+      else if (r.replaceable[k] === "build") o.append(el("span", "muted", "you can make more once you build a machine"));
       else if (!r.replaceable[k]) o.append(el("span", "short", "you can't make more of this yet"));
       else o.append(el("span", "muted", "you can make more"));
       if (src.length) {

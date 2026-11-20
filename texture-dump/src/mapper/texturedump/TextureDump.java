@@ -569,6 +569,7 @@ public class TextureDump {
   static class Recipe {
     String type;
     int eut;
+    int ticks;  // how long a GregTech recipe runs, its energy is eut * ticks
     int w, h;  // a shaped crafting recipe's grid, its slots row by row with empty ones kept, 0 for shapeless
     final List<List<String>> in = new ArrayList<>();  // each alternative: "mod:name:damage", "fluid:name", damage 32767 is any
     final List<int[]> inMeta = new ArrayList<>();    // per slot: count (0 for not consumed: tools, GT circuits and molds), fluid mB
@@ -719,6 +720,7 @@ public class TextureDump {
             Recipe r = new Recipe();
             r.type = mapName;
             r.eut = gc.getField("mEUt").getInt(g);
+            r.ticks = gc.getField("mDuration").getInt(g);
             boolean ok = true;
             for (Object st : (Object[]) gc.getField("mInputs").get(g)) {
               if (st == null) continue;
@@ -794,6 +796,7 @@ public class TextureDump {
       if (n++ > 0) json.append(",\n");
       json.append("{\"t\":\"").append(escape(r.type)).append("\"");
       if (r.eut != 0) json.append(",\"eut\":").append(r.eut);
+      if (r.ticks != 0) json.append(",\"ticks\":").append(r.ticks);
       if (r.w > 0) json.append(",\"w\":").append(r.w).append(",\"h\":").append(r.h);
       json.append(",\"in\":[");
       for (int i = 0; i < r.in.size(); i++) {

@@ -30,6 +30,7 @@ struct Out {
 struct Recipe {
   int type;  // index into types
   int eut;
+  int ticks = 0;     // how long it runs (GregTech), its energy is eut * ticks
   int w = 0, h = 0;  // a shaped crafting grid (its slots row by row, empty cells have no alternatives), 0 if shapeless
   vector<Slot> in;
   vector<Out> out;
@@ -194,6 +195,9 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 // no cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires isn't
 // better than 1 ingot to 2 wires), steps are what count
 const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0, PRECIOUS = 16;
+// energy counts too: about what a piece of coal gives in a generator (12,800 EU) is worth an item. so the cutting
+// machine's free water, slow and power hungry, has to beat lubricant on more than being free
+const double EU = 1.0 / 10000;
 // what a route is scored by: what it uses up, made worse by how many steps it takes (each step 10%: another
 // machine to load and wait on), so using something held beats a long way to an equivalent, and a longer route has
 // to save real material to win (crushed galena straight into the furnace beats crushing ore into nuggets)
@@ -226,7 +230,7 @@ bool is_multi(int key) { return multi_keys.count(key) > 0; }
 // that isn't used up) costs nothing when held, otherwise what making one costs: charged every run, which only
 // matters to the ranking (a plan makes it once)
 double run_cost(const Solved &s, const Recipe &rc) {
-  double c = PER_RUN;
+  double c = PER_RUN + (double)max(rc.eut, 0) * rc.ticks * EU;
   for (auto &slot : rc.in) {
     if (slot.alts.empty()) continue;
     double b = INFINITY;
@@ -1015,6 +1019,7 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
         Recipe rc;
         rc.type = type_of(e["t"].get<string>());
         rc.eut = e.value("eut", 0);
+        rc.ticks = e.value("ticks", 0);
         rc.w = e.value("w", 0);
         rc.h = e.value("h", 0);
         for (auto &slot : e["in"]) {
@@ -1029,7 +1034,7 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     }
     // a bucket fills from any water source, no recipe has that
     if (key_index.count("minecraft:water_bucket:0"))
-      recipes.push_back({type_of("fill"), 0, 0, 0, {{1, {intern("minecraft:bucket:0")}}}, {{intern("minecraft:water_bucket:0"), 1, 10000}}});
+      recipes.push_back({type_of("fill"), 0, 0, 0, 0, {{1, {intern("minecraft:bucket:0")}}}, {{intern("minecraft:water_bucket:0"), 1, 10000}}});
     if (exists(dir / "fluids.json")) {
       // keep the document alive, items() only refers into it
       json fl = json::parse(readFile(dir / "fluids.json"));
@@ -1387,7 +1392,11 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     int kk = key_index[key2];
     if (circuit_key[kk] || s->free[kk]) continue;
     // nothing makes it at all (an ore, a crop, a mob drop): it's gathered, not something that runs out
-    replace[key2] = made_by[kk].empty() ? json("gathered") : json((bool)s->replaceable[kk]);
+    // gathered: nothing makes it at all (an ore, a crop, a mob drop). "build": more can be made once a machine is
+    // built (an MV bending machine for the empty shape plate a mold is pressed from)
+    replace[key2] = made_by[kk].empty() ? json("gathered")
+                  : s->replaceable[kk] || now->replaceable[kk] ? json(true)
+                  : build->replaceable[kk] ? json("build") : json(false);
     string lookup = wild[kk] ? key2.substr(0, key2.rfind(':')) + ":0" : key2;
     if (auto f2 = sources.find(lookup); f2 != sources.end()) from[key2] = f2->second;
   }
