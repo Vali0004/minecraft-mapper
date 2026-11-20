@@ -435,7 +435,8 @@ function howTo(r, key, qty) {
     const src = (r.sources || {})[k] || [];
     if (r.replaceable && k in r.replaceable) {
       const o = el("div", "ct");
-      if (!r.replaceable[k]) o.append(el("span", "short", "you can't make more of this yet"));
+      if (r.replaceable[k] === "gathered") o.append(el("span", "muted", "gathered"));
+      else if (!r.replaceable[k]) o.append(el("span", "short", "you can't make more of this yet"));
       else o.append(el("span", "muted", "you can make more"));
       if (src.length) {
         const sp = el("span", "muted", ` · from ${src.slice(0, 2).join(", ")}${src.length > 2 ? ` and ${src.length - 2} more` : ""}`);

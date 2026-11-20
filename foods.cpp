@@ -1314,7 +1314,8 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     if (node.size() != 1 || node[0].is_null() || node[0].get<int>() != 0) continue;
     int kk = key_index[key2];
     if (circuit_key[kk] || s->free[kk]) continue;
-    replace[key2] = (bool)s->replaceable[kk];
+    // nothing makes it at all (an ore, a crop, a mob drop): it's gathered, not something that runs out
+    replace[key2] = made_by[kk].empty() ? json("gathered") : json((bool)s->replaceable[kk]);
     string lookup = wild[kk] ? key2.substr(0, key2.rfind(':')) + ":0" : key2;
     if (auto f2 = sources.find(lookup); f2 != sources.end()) from[key2] = f2->second;
   }
