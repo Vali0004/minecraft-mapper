@@ -1330,7 +1330,12 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     if (types[recipes[r].type] == "gt.recipe.fluidcanner") continue;
     bool takes = false, gives = false;
     for (auto &slot : recipes[r].in)
-      if (slot.count > 0 && !slot.alts.empty()) takes |= is_assembled(slot.alts[0]);
+      if (slot.count > 0 && !slot.alts.empty() && !vanilla_material(slot.alts[0])) {
+        // An empty cell in a chemical recipe is packaging for the new fluid, not an assembled ingredient being
+        // broken down (iron dust + acid + empty cells makes Iron III Chloride).
+        if (types[recipes[r].type] == "gt.recipe.chemicalreactor" && keys[slot.alts[0]] == "IC2:itemCellEmpty:0") continue;
+        takes |= is_assembled(slot.alts[0]);
+      }
     if (!takes) continue;
     for (auto &o : recipes[r].out)
       if (keys[o.key].compare(0, 6, "fluid:") != 0 && !vanilla_material(o.key)) gives |= is_assembled(o.key);
