@@ -200,9 +200,12 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 
 // what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
 // also costs a little, so of two equally thrifty routes the shorter wins
-// no cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires isn't
-// better than 1 ingot to 2 wires), steps are what count
+// no general cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires
+// isn't better than 1 ingot to 2 wires). Furnace smelting has a separate fuel and handling cost.
 const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0, PRECIOUS = 16;
+// A furnace batch uses fuel (roughly one coal per eight items) and needs handling. Without a per-item cost,
+// hundreds of nugget smelts appear nearly free beside one powered machine run.
+const double FURNACE_RUN = 0.25;
 // energy counts too: 40,000 EU is worth an item (a few pieces of coal in a generator, a team running on steam has
 // plenty). enough that the cutting machine's free water, slow and power hungry, doesn't win on being free alone,
 // not so much that a machine saving material loses to wasting it by hand (a bending machine's plate from 1 ingot
@@ -241,7 +244,7 @@ bool is_multi(int key) { return multi_keys.count(key) > 0; }
 // that isn't used up) costs nothing when held, otherwise what making one costs: charged every run, which only
 // matters to the ranking (a plan makes it once)
 double run_cost(const Solved &s, const Recipe &rc) {
-  double c = PER_RUN + (double)max(rc.eut, 0) * rc.ticks * EU;
+  double c = PER_RUN + (types[rc.type] == "smelting" ? FURNACE_RUN : 0) + (double)max(rc.eut, 0) * rc.ticks * EU;
   for (auto &slot : rc.in) {
     if (slot.alts.empty()) continue;
     double b = INFINITY;
@@ -903,8 +906,16 @@ void fill_shortfalls(const Solved &s, const FoodGroup *g, int k, double qty, jso
       // 8x wire crafted back down (cheaper per wire for 64, not for 4)
       b.root = kk;
       b.target = k;
-      if (b.add(kk, -1, true, want - have[key])) grew = true;
-      else {
+      if (b.add(kk, -1, true, want - have[key])) {
+        // This is a top-up of an ingredient, even though it is the root of this small retry.
+        // Keep the stock already held instead of making the entire demand again.
+        if (have[key] > 0) {
+          json &made = nodes[key];
+          if (made.size() < 4) made.push_back(json::object());
+          made[3]["partial"] = true;
+        }
+        grew = true;
+      } else {
         b.back_to(0);
         nodes[key] = {0};
         seen.insert(kk);
@@ -960,7 +971,8 @@ double plan_total(const Solved &s, const FoodGroup *g, int k, double qty, const 
     double want = p.need[key];
     if (n.size() >= 4 && n[3].value("partial", false)) want = max(0.0, want - have[key]);
     if (per > 0 && want > 0)
-      used += ceil(want / per - 1e-9) * max(recipes[r].eut, 0) * recipes[r].ticks * EU;
+      used += ceil(want / per - 1e-9) * ((types[recipes[r].type] == "smelting" ? FURNACE_RUN : 0) +
+                                             max(recipes[r].eut, 0) * recipes[r].ticks * EU);
   }
   return score(used, (int)p.order.size());
 }
