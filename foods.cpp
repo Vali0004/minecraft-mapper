@@ -588,6 +588,9 @@ struct TreeBuild {
   // held things there's too little of and no way to make more: not used, so the plan backs out to another way
   const set<int> *scarce = nullptr;
   int building = 0;  // how many machines being built the current branch is inside
+  // what the whole plan makes: never an ingredient inside its own plan (steel ingots from steel plates bent from
+  // steel ingots), except held stock of it going into a machine the plan builds
+  int target = -1;
   // what the plan is for: its top recipe is judged for this amount, not a typical one
   int root = -1;
   double root_qty = 0;
@@ -711,6 +714,7 @@ struct TreeBuild {
     return walk(k);
   }
   bool add(int k, int force = -1, bool make = false) {
+    if (k == target && !stack.empty() && !(building > 0 && cost_of(s, k) == 0)) return false;
     // already planned: reuse it, unless it needs what's being made higher up (that would be a loop: more
     // annealed copper ingots from macerating the wire the plan makes out of annealed copper ingots)
     // (the fewest steps fallback can't loop, every step there is closer to what's held: no check, so it always
@@ -879,6 +883,7 @@ void fill_shortfalls(const Solved &s, const FoodGroup *g, int k, double qty, jso
       // 8x wire crafted back down (cheaper per wire for 64, not for 4)
       b.root = kk;
       b.root_qty = want - have[key];
+      b.target = k;
       if (b.add(kk, -1, true)) grew = true;
       else {
         b.back_to(0);
@@ -908,8 +913,6 @@ set<int> short_of(const FoodGroup *g, int k, double qty, const json &nodes, cons
   return out;
 }
 
-// the plan for qty of k: the thriftiest tree, short things made where they can be, and where they can't, planned
-// around (each round marks what's still short as scarce and plans again, keeping the last plan that worked)
 // what a whole plan costs: everything it uses up of what's held (at what each is worth), made worse by its steps
 double plan_total(const Solved &s, const FoodGroup *g, int k, double qty, const json &nodes, const json &jr) {
   map<string, int64_t> have;
@@ -922,14 +925,18 @@ double plan_total(const Solved &s, const FoodGroup *g, int k, double qty, const 
     int kk = key_index[key];
     bool held = n->size() == 1 && !n->at(0).is_null() && n->at(0).get<int>() == 0;
     bool partial = n->size() >= 4 && (*n)[3].value("partial", false);
-    if (held) used += want * s.value[kk];
-    else if (partial) used += min<double>(want, have[key]) * s.value[kk];
+    if (held) {
+      used += min<double>(want, have[key]) * s.value[kk];
+      // more than there is, and the plan couldn't make the rest: it can't be carried out. any plan that can wins,
+      // one that's short is only kept when there's nothing else
+      if (want > have[key] && !s.free[kk] && !circuit_key[kk]) used += (want - have[key]) * 1e6;
+    } else if (partial) used += min<double>(want, have[key]) * s.value[kk];
   }
   return score(used, (int)p.order.size());
 }
 
 // the plan for qty of k: the thriftiest tree, short things made where they can be, and where they can't, planned
-// around (each round marks what's still short as scarce and plans again, keeping the last plan that worked).
+// around (each round marks what's still short as scarce and plans again, keeping the cheapest plan found).
 // something held that runs short and gets topped up is also tried without (86 lead dust beats making more lead
 // nuggets once the 9 held ones run out), whichever whole plan costs less is kept
 void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int force, json &nodes, json &jr, set<int> &named) {
@@ -953,6 +960,7 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     b.scarce = &avoid;
     b.root = k;
     b.root_qty = qty;
+    b.target = k;
     // the target is made even when some is held: looking it up is wanting more of it. something nothing makes
     // stays held (or unreachable)
     if (!b.add(k, force, !made_by[k].empty())) return false;
@@ -961,7 +969,9 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     fill_shortfalls(*use, g, k, qty, n2, r2, named2, seen2, &avoid);
     return true;
   };
-  for (int round = 0; round < 4; round++) {
+  // each round avoids what the last attempt was short of or had to top up, and the cheapest whole plan seen is
+  // kept (avoiding the plates can leave a plan short of bolts: avoid those too, rather than stop)
+  for (int round = 0; round < 6; round++) {
     json n2 = json::object(), r2 = json::object();
     set<int> named2;
     bool ok = attempt(scarce, n2, r2, named2);
@@ -974,15 +984,24 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     }
     if (!ok) break;
     double total = plan_total(s, g, k, qty, n2, r2);
-    if (have_plan && total >= have_total) break;  // planning around made it worse: keep what there is
-    nodes = move(n2), jr = move(r2);
-    named.insert(named2.begin(), named2.end());
-    have_plan = true;
-    have_total = total;
-    // what to try avoiding next: held things it's short of and can't make, and held things it had to top up
-    set<int> more = short_of(g, k, qty, nodes, jr);
-    for (auto &[key, n] : nodes.items())
+    set<int> more = short_of(g, k, qty, n2, r2);
+    for (auto &[key, n] : n2.items())
       if (key_index[key] != k && n.size() >= 4 && n[3].value("partial", false)) more.insert(key_index[key]);
+    // short: the odds and ends it reached for won't do either (4 steel plates, then 3 nuggets, then a chain
+    // helmet...), a plan takes one source per ingredient. avoid every small held stock it used at once, so the
+    // next round looks for a real source (iron dust into the blast furnace)
+    if (!more.empty())
+      for (auto &[key, n] : n2.items()) {
+        int kk = key_index[key];
+        if (kk == k || n.size() != 1 || n[0].is_null() || n[0].get<int>() != 0 || s.free[kk] || circuit_key[kk]) continue;
+        if (held_of(g, kk) < 16) more.insert(kk);
+      }
+    if (!have_plan || total < have_total) {
+      nodes = move(n2), jr = move(r2);
+      named.insert(named2.begin(), named2.end());
+      have_plan = true;
+      have_total = total;
+    }
     size_t before = scarce.size();
     scarce.insert(more.begin(), more.end());
     if (scarce.size() == before) break;
@@ -1251,6 +1270,9 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     if (key.compare(0, 6, "fluid:") == 0 ||
         (key.compare(0, 23, "gregtech:gt.metaitem.01") == 0 && atoi(key.c_str() + key.rfind(':') + 1) < 32000))
       return (bool)(assembled[k] = 0);
+    // GregTech's blocks you place, pipes, cables and machines: built things, even a pipe made from one material
+    // (smelting small steel fluid pipes back to ingots is scrapping them)
+    if (key.compare(0, 25, "gregtech:gt.blockmachines") == 0) return (bool)(assembled[k] = 1);
     bool any = false;
     for (int r : made_by[k]) {
       // every way counts, even ones the loose recycling check flags (a cable is made from wire and rubber, cables
