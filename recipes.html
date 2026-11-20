@@ -142,12 +142,14 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
   </div>
   <p class="note">
     Steps start from what the team has: everything in containers in its claimed chunks and in its members' inventories,
-    ender chests and backpacks. A step needs a machine the team owns, at the right voltage. The steps are the route
-    that uses up the least of what the team has, counted all the way down (an item counts 1, 144 mB of a fluid
-    counts 1, each run a little), byproducts aren't counted. Anything the team already has is used as is, not
-    made. Under "other ways", "plan with this" routes through that recipe instead. Water and GregTech programmed circuits
-    (set in the machine) are free. Machines outside GregTech, the crafting grid and the furnace (Forestry, Thaumcraft…)
-    aren't known.
+    ender chests and backpacks. The plan is the route that uses up the least, counted all the way down (an item 1,
+    144 mB of a fluid 1, something held what making another would cost), each step adding 3%, so using what's held
+    beats making an equivalent. Byproducts aren't counted. What's held is used first, what's short is made, and
+    what's short and can't be made is planned around. It uses the team's machines, and builds one only when there's
+    no other way (power isn't planned, nor a multiblock's structure). Nothing gets taken apart, except emptying cells.
+    Under "other ways", "plan with this" routes through that recipe instead. Water and GregTech programmed circuits
+    (set in the machine) are free. Machines outside GregTech, the crafting grid and the furnace (Forestry,
+    Thaumcraft…) aren't known.
   </p>
 </main>
 <script>
@@ -382,7 +384,7 @@ function howTo(r, key, qty) {
   needCard.append(el("div", "muted", "You'll use"));
   needCard.lastChild.style.marginBottom = "8px";
   for (const k of p.leaves.sort((a, b) => p.tools.has(a) - p.tools.has(b) || name(a).localeCompare(name(b)))) {
-    if (circuitOf(k) !== null || k === "fluid:water") continue;
+    if (circuitOf(k) !== null || k === "fluid:water" || (r.free || []).includes(k)) continue;
     const partial = p.fromStore.has(k);
     const want = partial ? p.fromStore.get(k) : p.need.get(k), have = r.have[k];
     const row = el("div", "need"), t = el("div", "t");
@@ -399,7 +401,10 @@ function howTo(r, key, qty) {
     grid.append(row);
   }
   needCard.append(grid);
-  if (p.leaves.includes("fluid:water")) needCard.append(el("div", "muted", "Water from any source."));
+  const freeNotes = [];
+  if (p.leaves.includes("fluid:water")) freeNotes.push("Water from any source.");
+  for (const f of r.free || []) if (p.leaves.includes(f)) freeNotes.push(`${name(f)} from your boilers.`);
+  if (freeNotes.length) needCard.append(el("div", "muted", freeNotes.join(" ")));
   parts.push(needCard);
 
   // routed through a recipe picked below: say so, and how to go back
@@ -470,7 +475,9 @@ function altCard(p, key, best) {
   // the whole route through it, against the thriftiest
   if (p.cost != null && best) {
     const x = p.cost / best;
-    h.append(el("span", "chip" + (x < 1.005 ? " circuit" : ""), x < 1.005 ? "thriftiest route" : `route uses ${fmt(x)}× as much`));
+    // scoring better than the plan's pick: it was passed over, something along it would run short
+    if (x < 0.995 && forced == null) h.append(el("span", "chip", "cheaper, but you'd run short of something on the way"));
+    else h.append(el("span", "chip" + (x < 1.005 ? " circuit" : ""), x < 1.005 ? (forced === p.id ? "your pick" : "the plan's pick") : `route costs ${fmt(x)}× as much`));
   }
   if (p.cost != null) {
     const b = el("button", "use", forced === p.id ? "planning with this" : "plan with this");
@@ -551,7 +558,7 @@ function render(r, key, qty) {
     }
     const sort = el("select", "sort");
     sort.setAttribute("aria-label", "Sort recipes");
-    for (const [v, label] of [["route", "Thriftiest route from what you have"], ["default", "Fewest steps"], ["ratio", "Best yield of this step"], ["per", "Most per run"]]) {
+    for (const [v, label] of [["route", "Best route from what you have"], ["default", "Fewest steps"], ["ratio", "Best yield of this step"], ["per", "Most per run"]]) {
       const o = el("option", null, label); o.value = v; sort.append(o);
     }
     sort.value = sortBy;

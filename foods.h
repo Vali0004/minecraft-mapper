@@ -17,6 +17,8 @@
 struct FoodGroup {
   std::map<std::string, int64_t> held;  // what's in its claimed chunks' containers and its members' inventories
   std::vector<int> machines;            // GregTech mIDs of its machines, in its claimed chunks
+  // fluids it makes without a recipe, free like water: steam when it has a boiler
+  std::set<std::string> free_fluids;
 };
 
 struct FoodPlayer {

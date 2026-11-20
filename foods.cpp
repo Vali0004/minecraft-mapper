@@ -155,6 +155,7 @@ string display(int k) {
 struct Solved {
   bool build = false;  // may plan building machines the group doesn't have
   vector<bool> held;   // per key: really in the group's storage (not just free: water, circuits)
+  vector<bool> free;   // per key: costs nothing: water, the group's free fluids (steam with a boiler)
   vector<int> dist, best, any;  // per key: steps from what's held, the recipe that does it. per item: best over damages
   vector<int> tier;             // per recipe type: the best voltage tier the group can run it at, -1 for none
   // per key: how much of the group's holdings one of it (one mB for a fluid) uses up on its cheapest route, and
@@ -164,6 +165,8 @@ struct Solved {
   // per key: what one held unit is worth (0 for what isn't held). a held thing that can be made is worth what
   // making another would cost, so a route doesn't use up something valuable (recycle a held machine for its dust)
   vector<double> value;
+  // per key: how many recipe steps its thriftiest route takes (0 when held), per item the fewest over damages
+  vector<int> steps, steps_any;
 };
 
 int cost_of(const Solved &s, int alt) { return wild[alt] ? s.any[name_of[alt]] : s.dist[alt]; }
@@ -174,6 +177,10 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 // what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
 // also costs a little, so of two equally thrifty routes the shorter wins
 const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0.05, PRECIOUS = 16;
+// what a route is scored by: what it uses up, made worse by how many steps it takes (each step 3%), so using
+// something held beats a long way to an equivalent, and a much longer route has to save a lot to win
+const double STEP = 0.03;
+double score(double cost, int steps) { return cost * (1 + STEP * steps); }
 
 bool owns(const Solved &s, const Recipe &rc) {
   return s.tier[rc.type] >= 0 && (rc.eut <= 0 || tier_for(rc.eut) <= s.tier[rc.type]);
@@ -217,12 +224,38 @@ double run_cost(const Solved &s, const Recipe &rc) {
   }
   return c;
 }
+int steps_of(const Solved &s, int alt) { return wild[alt] ? s.steps_any[name_of[alt]] : s.steps[alt]; }
+// how many steps one run of rc stands on: one, plus the longest of what its inputs take (each slot from the
+// alternative run_cost picks), plus building its machine
+int run_steps(const Solved &s, const Recipe &rc) {
+  int st = 0;
+  for (auto &slot : rc.in) {
+    if (slot.alts.empty()) continue;
+    double b = INFINITY;
+    int bs = 0;
+    for (int a : slot.alts) {
+      if (!usable(s, slot, a)) continue;
+      double c = slot.count == 0 && cost_of(s, a) == 0 ? 0.0 : raw_of(s, a);
+      if (c < b) b = c, bs = cost_of(s, a) == 0 ? 0 : steps_of(s, a);
+    }
+    st = max(st, bs);
+  }
+  if (!owns(s, rc))
+    if (int m = machine_to_build(s, rc); m >= 0 && s.dist[m] != 0) st = max(st, s.steps[m]);
+  return st + 1;
+}
 // how much of key k one run of rc makes, on average
 double made_per_run(const Recipe &rc, int k) {
   double n = 0;
   for (auto &o : rc.out)
     if (o.key == k) n += o.amount * o.chance / 10000.0;
   return n;
+}
+
+// what a route through rc scores, per unit of k
+double route_score(const Solved &s, const Recipe &rc, int k) {
+  double per = made_per_run(rc, k), c = run_cost(s, rc);
+  return per > 0 && c < INFINITY ? score(c / per, run_steps(s, rc)) : INFINITY;
 }
 
 // how many recipe steps each key is from the group's holdings. a recipe works when its machine is owned (with
@@ -254,7 +287,14 @@ Solved solve(const FoodGroup &g, bool build) {
     if (n != name_index.end()) s.any[n->second] = 0;
   }
   // water is free: a pump, a water source next to the machine
-  if (auto w = key_index.find("fluid:water"); w != key_index.end()) reach(w->second, 0, -1);
+  s.free.assign(keys.size(), false);
+  set<string> free_fluids = g.free_fluids;
+  free_fluids.insert("water");
+  for (auto &f : free_fluids)
+    if (auto w = key_index.find("fluid:" + f); w != key_index.end()) {
+      reach(w->second, 0, -1);
+      s.free[w->second] = true;
+    }
   // so is a GregTech programmed circuit: a machine's circuit slot is set from its GUI, no item needed
   if (auto c = name_index.find("gregtech:gt.integrated_circuit"); c != name_index.end()) {
     s.any[c->second] = 0;
@@ -304,7 +344,7 @@ Solved solve(const FoodGroup &g, bool build) {
   auto circuit = name_index.find("gregtech:gt.integrated_circuit");
   auto base = [&](int k) {
     // water and programmed circuits cost nothing (see above), an item 1, a fluid's mB 1/144
-    if (keys[k] == "fluid:water" || (circuit != name_index.end() && name_of[k] == circuit->second)) return 0.0;
+    if (s.free[k] || (circuit != name_index.end() && name_of[k] == circuit->second)) return 0.0;
     return keys[k].compare(0, 6, "fluid:") == 0 ? MB : ITEM;
   };
   vector<int> runnable;
@@ -315,21 +355,30 @@ Solved solve(const FoodGroup &g, bool build) {
     for (auto &o : rc.out) useful |= s.dist[o.key] > 0 && s.dist[o.key] < INF;
     if (useful) runnable.push_back(r);
   }
-  auto cheaper = [&](int k, double c, int r) {
+  auto cheaper = [&](int k, double c, int r, int st) {
     if (!(c < s.cost[k] * (1 - 1e-9))) return false;
     s.cost[k] = c;
     s.cheapest[k] = r;
-    if (name_of[k] >= 0) s.cost_any[name_of[k]] = min(s.cost_any[name_of[k]], c);
+    s.steps[k] = st;
+    if (name_of[k] >= 0) {
+      s.cost_any[name_of[k]] = min(s.cost_any[name_of[k]], c);
+      s.steps_any[name_of[k]] = min(s.steps_any[name_of[k]], st);
+    }
     return true;
   };
   auto relax = [&]() {
     s.cost.assign(keys.size(), INFINITY);
     s.cost_any.assign(name_index.size(), INFINITY);
     s.cheapest.assign(keys.size(), -1);
+    s.steps.assign(keys.size(), 1 << 20);
+    s.steps_any.assign(name_index.size(), 1 << 20);
     for (int k = 0; k < (int)keys.size(); k++)
-      if (s.dist[k] == 0) cheaper(k, s.value[k], -1);
+      if (s.dist[k] == 0) cheaper(k, s.value[k], -1, 0);
     for (size_t n = 0; n < name_index.size(); n++)
-      if (s.any[n] == 0 && s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
+      if (s.any[n] == 0) {
+        if (s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
+        s.steps_any[n] = 0;
+      }
     for (int pass = 0; pass < 200; pass++) {
       bool changed = false;
       for (int r : runnable) {
@@ -339,7 +388,7 @@ Solved solve(const FoodGroup &g, bool build) {
         for (auto &o : rc.out) {
           if (s.dist[o.key] == 0) continue;
           double per = made_per_run(rc, o.key);
-          if (per > 0) changed |= cheaper(o.key, c / per, r);
+          if (per > 0) changed |= cheaper(o.key, c / per, r, run_steps(s, rc));
         }
       }
       if (!changed) break;
@@ -420,8 +469,8 @@ struct TreeBuild {
     for (int r : made_by[k]) {
       double per = made_per_run(recipes[r], k);
       if (per <= 0 || !plannable[r] || !machine_ok(s, recipes[r])) continue;
-      double rc = run_cost(s, recipes[r]);
-      if (rc < INFINITY) c.emplace_back(rc / per, r);
+      double sc = route_score(s, recipes[r], k);
+      if (sc < INFINITY) c.emplace_back(sc, r);
     }
     sort(c.begin(), c.end());
     vector<int> out;
@@ -433,7 +482,11 @@ struct TreeBuild {
     for (int x : slot.alts)
       if (cost_of(s, x) < INF && usable(s, slot, x)) a.push_back(x);
     if (thrifty)
-      stable_sort(a.begin(), a.end(), [&](int x, int y) { return raw_of(s, x) < raw_of(s, y) || (raw_of(s, x) == raw_of(s, y) && cost_of(s, x) < cost_of(s, y)); });
+      stable_sort(a.begin(), a.end(), [&](int x, int y) {
+        // held counts as no steps: use what there is before making an equivalent
+        double sx = score(raw_of(s, x), cost_of(s, x) == 0 ? 0 : steps_of(s, x)), sy = score(raw_of(s, y), cost_of(s, y) == 0 ? 0 : steps_of(s, y));
+        return sx < sy || (sx == sy && cost_of(s, x) < cost_of(s, y));
+      });
     else
       stable_sort(a.begin(), a.end(), [&](int x, int y) { return cost_of(s, x) < cost_of(s, y); });
     return a;
@@ -495,7 +548,9 @@ struct TreeBuild {
       vector<int> ks;
       for (int k2 : keys_of_name[name_of[k]])
         if (!wild[k2] && s.dist[k2] < INF) ks.push_back(k2);
-      stable_sort(ks.begin(), ks.end(), [&](int x, int y) { return thrifty ? s.cost[x] < s.cost[y] : s.dist[x] < s.dist[y]; });
+      stable_sort(ks.begin(), ks.end(), [&](int x, int y) {
+        return thrifty ? score(s.cost[x], s.dist[x] == 0 ? 0 : s.steps[x]) < score(s.cost[y], s.dist[y] == 0 ? 0 : s.steps[y]) : s.dist[x] < s.dist[y];
+      });
       for (int k2 : ks)
         if (add(k2)) {
           put(k, {d, -1, json::array({keys[k2]})});
@@ -648,7 +703,8 @@ set<int> short_of(const FoodGroup *g, int k, double qty, const json &nodes, cons
     auto n = nodes.find(key);
     if (n == nodes.end() || n->size() != 1 || n->at(0).is_null() || n->at(0).get<int>() != 0) continue;
     int kk = key_index[key];
-    if (circuit_key[kk] || key == "fluid:water" || have[key] >= want) continue;
+    bool free = key == "fluid:water" || (g && key.compare(0, 6, "fluid:") == 0 && g->free_fluids.count(key.substr(6)));
+    if (circuit_key[kk] || free || have[key] >= want) continue;
     out.insert(kk);
   }
   return out;
@@ -1061,7 +1117,9 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     rj["steps"] = worst >= INF ? json(nullptr) : json(worst + 1);
     rj["id"] = r;
     // what one of it uses up of the group's holdings going this way, all the way down
-    double per = made_per_run(recipes[r], k), c = state / 2 == 0 && per > 0 ? run_cost(*build, recipes[r]) / per : INFINITY;
+    // the same score the plan picks by, from the same solve (the machines the group has, when that works)
+    const Solved &by = machine_ok(*s, recipes[r]) ? *s : *build;
+    double c = state / 2 == 0 && plannable[r] ? route_score(by, recipes[r], k) : INFINITY;
     rj["cost"] = c == INFINITY ? json(nullptr) : json(c);
     producers.push_back(rj);
   }
@@ -1095,12 +1153,24 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     out["blockers"] = b;
   }
   if (forced) out["route"]["forced"] = force;
-  out["route"]["cost"] = s->cost[k] == INFINITY ? json(nullptr) : json(s->cost[k]);
+  // the score of the recipe the plan took. one scoring better wasn't usable: the group would run short of
+  // something along it (or it was the one picked, then this is the thriftiest)
+  double took = INFINITY, best = INFINITY;
+  for (int r : made_by[k])
+    if (plannable[r] && machine_ok(*s, recipes[r])) best = min(best, route_score(*s, recipes[r], k));
+  if (auto root = nodes.find(key); root != nodes.end() && root->size() >= 3 && !(*root)[0].is_null() && (*root)[1].get<int>() >= 0)
+    took = route_score(*s, recipes[(*root)[1].get<int>()], k);
+  out["route"]["cost"] = forced || took == INFINITY ? (best == INFINITY ? json(nullptr) : json(best)) : json(took);
   // how much of each thing the route starts from the group has ("any damage": all damages together)
   json have = json::object();
   for (auto &[key, node] : nodes.items())
     if (int64_t n = held_of(gp, key_index[key]); n > 0 || (node.size() == 1 && !node[0].is_null())) have[key] = n;
   out["have"] = have;
+  // what the group has for free besides water (steam from its boilers)
+  json free = json::array();
+  if (gp)
+    for (auto &f : gp->free_fluids) free.push_back("fluid:" + f);
+  out["free"] = free;
   json &jn = out["names"] = json::object();
   for (int n : named) jn[keys[n]] = display(n);
   out["icons"] = icons_json(named);

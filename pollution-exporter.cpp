@@ -1399,6 +1399,9 @@ void collect_containers(const path savepath, string &out) {
         for (auto &[k, c] : its)
           if (string s = key(k); !s.empty()) fs.groups[tk.first].held[s] += c;
       for (auto &[team, dim, m] : machines) fs.groups[team].machines.push_back(m.id);
+      // a boiler (Railcraft's or GregTech's) makes steam, no recipe says so
+      for (auto &[team, dim, b] : boilers) fs.groups[team].free_fluids.insert("steam");
+      for (auto &[team, dim, b] : gt) fs.groups[team].free_fluids.insert("steam");
       for (auto &[k, c] : held) {
         auto &[team, player, where, container, item] = k;
         if (string s = key(item); !s.empty()) fs.groups[team.empty() ? "player:" + player : team].held[s] += c;
