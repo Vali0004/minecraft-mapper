@@ -195,14 +195,17 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 // no cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires isn't
 // better than 1 ingot to 2 wires), steps are what count
 const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0, PRECIOUS = 16;
-// energy counts too: about what a piece of coal gives in a generator (12,800 EU) is worth an item. so the cutting
-// machine's free water, slow and power hungry, has to beat lubricant on more than being free
-const double EU = 1.0 / 10000;
-// what a route is scored by: what it uses up, made worse by how many steps it takes (each step 10%: another
-// machine to load and wait on), so using something held beats a long way to an equivalent, and a longer route has
-// to save real material to win (crushed galena straight into the furnace beats crushing ore into nuggets)
-const double STEP = 0.10;
-double score(double cost, int steps) { return cost * (1 + STEP * steps); }
+// energy counts too: 40,000 EU is worth an item (a few pieces of coal in a generator, a team running on steam has
+// plenty). enough that the cutting machine's free water, slow and power hungry, doesn't win on being free alone,
+// not so much that a machine saving material loses to wasting it by hand (a bending machine's plate from 1 ingot
+// against crafting one from 2)
+const double EU = 1.0 / 40000;
+// what a route is scored by: what it uses up, plus a fixed cost per step (another machine to load and wait on,
+// worth about an item, however much goes through it). so a small job takes the fewest steps (one copper ingot:
+// smelt the crushed malachite), a big one the process that yields more (64: malachite dust in the blast furnace
+// gives half as much again), and using something held beats a long way to an equivalent
+const double STEP = 1;
+double score(double cost, int steps) { return cost + STEP * steps; }
 
 bool owns(const Solved &s, const Recipe &rc) {
   return s.tier[rc.type] >= 0 && (rc.eut <= 0 || tier_for(rc.eut) <= s.tier[rc.type]);
@@ -472,10 +475,15 @@ Solved solve(const FoodGroup &g, bool build) {
     }
     return false;
   };
+  // again until it settles: each round values held things from what the others are worth after the last one, so
+  // the crushed ore's worth reaches the impure dust made from it, and the dust made from that
+  vector<double> before;
+  for (int round = 0; round < 4 && before != s.value; round++) {
+  before = s.value;
   vector<double> value = s.value;
   s.replaceable.assign(keys.size(), false);
   for (int k = 0; k < (int)keys.size(); k++) {
-    if (s.dist[k] != 0 || value[k] == 0 || made_by[k].empty()) continue;
+    if (s.dist[k] != 0 || before[k] == 0 || made_by[k].empty()) continue;
     double best = INFINITY;
     for (int r : made_by[k]) {
       const Recipe &rc = recipes[r];
@@ -498,6 +506,7 @@ Solved solve(const FoodGroup &g, bool build) {
   }
   s.value = value;
   relax();
+  }
   return s;
 }
 

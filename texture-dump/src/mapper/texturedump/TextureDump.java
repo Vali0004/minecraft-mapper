@@ -246,6 +246,16 @@ public class TextureDump {
     Class<?> lighting = Class.forName("net.minecraft.client.renderer.RenderHelper");
     Object blockAtlas = getStatic(Class.forName("net.minecraft.client.renderer.texture.TextureMap"), "field_110575_b", "locationBlocksTexture");
     Object tess = getStatic(Class.forName("net.minecraft.client.renderer.Tessellator"), "field_78398_a", "instance");
+    // chests and other blocks drawn by their tile entity renderer: its dispatcher only gets the texture manager and
+    // font when a world loads, at the main menu it has none and draws with whatever texture is bound (the block
+    // atlas, every chest came out as noise)
+    try {
+      Object dispatcher = getStatic(Class.forName("net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher"), "field_147556_a", "instance");
+      field(dispatcher.getClass(), "field_147553_e", "field_147553_e").set(dispatcher, textures);
+      field(dispatcher.getClass(), "field_147557_n", "field_147557_n").set(dispatcher, font);
+    } catch (Throwable t) {
+      System.err.println("[texturedump] couldn't give the tile entity renderers a texture manager: " + t);
+    }
 
     // what to draw: item stacks, and fluids as their still texture tinted with their color
     List<String> keys = new ArrayList<>();
