@@ -1120,14 +1120,15 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       }
     }
   }
-  // assembled: every way to make it (not counting taking things apart) puts together two or more different things.
-  // an ingot (molten metal and a mold that's kept), a rod, a wire, a dust are one material in another form
+  // assembled: every way to make it puts together two or more different things. an ingot (molten metal and a
+  // mold that's kept), a rod, a wire, a dust, a rubber sheet (cast from molten rubber) are one material in another
+  // form. counting the recipes that look like taking things apart too: the solidifier casting a sheet from molten
+  // rubber is exactly what says a sheet is just rubber
   vector<signed char> assembled(keys.size(), -1);
   auto is_assembled = [&](int k) {
     if (assembled[k] >= 0) return (bool)assembled[k];
     bool any = false, all = true;
     for (int r : made_by[k]) {
-      if (recycling[r]) continue;
       set<int> used;
       for (auto &slot : recipes[r].in)
         if (slot.count > 0 && !slot.alts.empty()) used.insert(slot.alts[0]);
