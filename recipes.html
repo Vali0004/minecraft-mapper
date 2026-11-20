@@ -498,6 +498,7 @@ function howTo(r, key, qty) {
     const m = p.extra(k).machine;
     if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
     if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
+    if (p.extra(k).auto) head.append(el("span", "chip pick", "your crafting module makes this"));
     li.append(head);
     const ins = uses.map((u, j) => {
       if (!u) return [null, 0];

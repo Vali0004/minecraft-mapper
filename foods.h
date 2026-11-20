@@ -21,6 +21,8 @@ struct FoodGroup {
   std::set<std::string> free_fluids;
   // other mods' stations it has, whose recipes it can then use: "tconstruct" (a smeltery)
   std::set<std::string> stations;
+  // what its Logistics Pipes crafting modules make by themselves: result -> the ingredients they're set up with
+  std::map<std::string, std::vector<std::string>> automated;
 };
 
 struct FoodPlayer {

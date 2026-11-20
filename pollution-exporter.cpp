@@ -424,7 +424,14 @@ struct CokeOven {
   string output;  // registry name of what it makes
 };
 
+// a Logistics Pipes crafting module: what it makes and from what
+struct LpCraft {
+  ItemKey out;
+  vector<ItemKey> in;
+};
+
 struct ChunkContainers {
+  vector<LpCraft> lp_crafts;
   map<ItemKey, int64_t> items;
   map<string, int64_t> tiles;  // tile entity id -> how many held items
   map<pair<string, string>, int64_t> fluids;  // (fluid, tile entity id) -> mB
@@ -472,6 +479,9 @@ struct TileParse {
   // quartz tank's root, TConstruct "Liquids/<i>"... keyed by the compound's path inside the tile entity
   map<string, FluidParse> fluids;
   map<string, double> numbers;  // the tile entity's own top level numbers (heat, pattern, master, x...)
+  // Logistics Pipes modules ("slot<n>" in a chassis, the pipe's own module at the top): their item settings,
+  // module -> list position -> (index, id, damage). a crafting module's is 0-8 ingredients and 9 the result
+  map<string, map<int, array<int, 3>>> lp_items;
 };
 
 struct ChunkParse {
@@ -608,8 +618,28 @@ static StackParse *nested_field(ChunkParse *c, const string &key, const char *&f
   return &te->nested[string(rest, slash - rest)];
 }
 
+// a Logistics Pipes module's settings: "<module>/items/<j>/<index|id|Damage>", <module> "slot<n>" or empty
+static void lp_number(ChunkParse *c, const string &key, int64_t v) {
+  const char *rest;
+  TileParse *te = tile_field(c, key, rest);
+  if (!te) return;
+  const char *items = strstr(rest, "items/");
+  if (!items || (items != rest && items[-1] != '/')) return;
+  string module(rest, items == rest ? 0 : items - rest - 1);
+  if (module.find('/') != string::npos) return;
+  char *end;
+  int j = strtol(items + 6, &end, 10);
+  if (*end != '/') return;
+  const char *field = end + 1;
+  auto &e = te->lp_items[module].try_emplace(j, array<int, 3>{-1, -1, 0}).first->second;
+  if (!strcmp(field, "index")) e[0] = v;
+  else if (!strcmp(field, "id")) e[1] = v;
+  else if (!strcmp(field, "Damage")) e[2] = v;
+}
+
 static void stack_number(const nbt_callbacks *cb, const string &key, int64_t v) {
   tile_number(cb, key, (double)v);
+  lp_number((ChunkParse *)cb->state, key, v);
   {
     const char *field;
     if (StackParse *st = nested_field((ChunkParse *)cb->state, key, field)) {
@@ -707,6 +737,17 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
         any = true;
       }
       for (auto &uid : te.backpacks) r.chunks[i].backpacks.push_back(uid);
+      // a Logistics Pipes crafting module: its settings have a result (index 9) besides ingredients (0-8)
+      if (te.id.compare(0, 14, "logisticspipes") == 0)
+        for (auto &[module, items] : te.lp_items) {
+          LpCraft lc{{-1, 0}, {}};
+          for (auto &[j, e] : items) {
+            if (e[1] <= 0) continue;
+            if (e[0] == 9) lc.out = {e[1], e[2]};
+            else if (e[0] >= 0 && e[0] < 9) lc.in.push_back({e[1], e[2]});
+          }
+          if (lc.out.id > 0 && !lc.in.empty()) r.chunks[i].lp_crafts.push_back(lc);
+        }
       if (te.item_bytes > 0)
         r.chunks[i].sizes.push_back({(int)te.numbers["x"], (int)te.numbers["y"], (int)te.numbers["z"], te.id, te.item_bytes});
       const string type = te.id.empty() ? "unknown" : te.id;
@@ -1050,6 +1091,7 @@ void collect_containers(const path savepath, string &out) {
   vector<tuple<string, int, Casting>> castings;
   set<string> chest_backpacks_seen;  // a backpack file counts once even if its UID turns up twice
   vector<tuple<string, int, ChunkContainers::Size>> sizes;
+  vector<pair<string, LpCraft>> lp_crafts;  // (team, crafting module) in claimed chunks
   // chunk sizes: every claimed chunk on its own, and per dimension totals and maximum over all chunks
   vector<tuple<string, int, int, int, int64_t, int64_t>> claimed_chunk_bytes;  // team, dim, x, z, compressed, uncompressed
   map<int, int64_t> dim_compressed, dim_uncompressed, dim_chunks, dim_max_compressed, dim_max_uncompressed;
@@ -1096,6 +1138,7 @@ void collect_containers(const path savepath, string &out) {
         for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
         for (auto &m : chunk.miners) miners.emplace_back(key.first, dimension, m);
         for (auto &c : chunk.castings) castings.emplace_back(key.first, dimension, c);
+        for (auto &c : chunk.lp_crafts) lp_crafts.emplace_back(key.first, c);
         for (auto &z : chunk.sizes) sizes.emplace_back(key.first, dimension, z);
         // a Backpack mod backpack in a chest: its contents are in its own file, read every scrape since they
         // change without the chest's chunk being saved. walked all the way down, backpacks in it included
@@ -1403,6 +1446,14 @@ void collect_containers(const path savepath, string &out) {
       for (auto &[tk, m] : fluids)
         for (auto &[fk, mb] : m)
           if (mb > 0 && fk.second.find("Pipe") == string::npos) fs.groups[tk.first].held["fluid:" + fk.first] += mb;
+      // Logistics Pipes crafting modules: what the team's network makes by itself
+      for (auto &[team, lc] : lp_crafts) {
+        string out = key(lc.out);
+        if (out.empty()) continue;
+        auto &ins = fs.groups[team].automated[out];
+        for (auto &in : lc.in)
+          if (string k = key(in); !k.empty() && find(ins.begin(), ins.end(), k) == ins.end()) ins.push_back(k);
+      }
       // a Tinkers' Construct smeltery: its melting, alloying and casting (a casting table is trivial to make)
       for (auto &[tk, ts] : tiles)
         for (auto &[type, n] : ts)

@@ -168,6 +168,8 @@ struct Solved {
   bool build = false;  // may plan building machines the group doesn't have
   vector<bool> held;   // per key: really in the group's storage (not just free: water, circuits)
   vector<bool> free;   // per key: costs nothing: water, the group's free fluids (steam with a boiler)
+  // what the group's Logistics Pipes crafting modules make: result -> the ingredients they're set up with
+  map<int, set<int>> automated;
   vector<int> dist, best, any;  // per key: steps from what's held, the recipe that does it. per item: best over damages
   vector<int> tier;             // per recipe type: the best voltage tier the group can run it at, -1 for none
   // per key: how much of the group's holdings one of it (one mB for a fluid) uses up on its cheapest route, and
@@ -269,6 +271,24 @@ double run_setup(const Solved &s, const Recipe &rc) {
 }
 bool gt_key(int k) { return keys[k].compare(0, 9, "gregtech:") == 0; }
 int steps_of(const Solved &s, int alt) { return wild[alt] ? s.steps_any[name_of[alt]] : s.steps[alt]; }
+// a recipe the group's crafting modules run by themselves: it makes what a module makes, and every ingredient it
+// uses up is one that module is set up with (an iron plate from iron ingots, not from a bending machine's ingot)
+bool automated(const Solved &s, const Recipe &rc) {
+  for (auto &o : rc.out) {
+    auto a = s.automated.find(o.key);
+    if (a == s.automated.end()) continue;
+    bool all = true;
+    for (auto &slot : rc.in) {
+      if (slot.count == 0 || slot.alts.empty()) continue;
+      bool any = false;
+      for (int x : slot.alts) any |= a->second.count(x) > 0;
+      all &= any;
+    }
+    if (all) return true;
+  }
+  return false;
+}
+
 // how many steps a route through rc takes: one, plus what each input takes (from the alternative run_cost picks),
 // plus building its machine. added up, a plan's effort is all of its steps, not its longest branch (something
 // used twice counts twice, it only ranks routes). capped, so a deep tree can't run away
@@ -287,7 +307,8 @@ int run_steps(const Solved &s, const Recipe &rc) {
   }
   if (!owns(s, rc))
     if (int m = machine_to_build(s, rc); m >= 0 && s.dist[m] != 0) st += s.steps[m];
-  return min(st + 1, 200);
+  // a step the group's crafting modules do by themselves is no effort
+  return min(st + (automated(s, rc) ? 0 : 1), 200);
 }
 // how much of key k one run of rc makes, on average
 double made_per_run(const Recipe &rc, int k) {
@@ -339,6 +360,10 @@ Solved solve(const FoodGroup &g, bool build) {
     if (n != name_index.end()) s.any[n->second] = 0;
   }
   // water is free: a pump, a water source next to the machine
+  for (auto &[out, ins] : g.automated)
+    if (auto o = key_index.find(out); o != key_index.end())
+      for (auto &in : ins)
+        if (auto i = key_index.find(in); i != key_index.end()) s.automated[o->second].insert(i->second);
   s.free.assign(keys.size(), false);
   set<string> free_fluids = g.free_fluids;
   free_fluids.insert("water");
@@ -1435,6 +1460,12 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   const FoodGroup *gp = gi != snapshot.groups.end() ? &gi->second : nullptr;
   build_plan(*s, gp, k, qty, forced ? force : -1, nodes, jr, named);
   out["qty"] = qty;
+  // steps the team's crafting modules do by themselves
+  for (auto &[key2, n] : nodes.items())
+    if (n.size() >= 3 && !n[0].is_null() && n[1].get<int>() >= 0 && automated(*s, recipes[n[1].get<int>()])) {
+      if (n.size() < 4) n.push_back(json::object());
+      n[3]["auto"] = true;
+    }
   out["route"] = {{"nodes", nodes}, {"recipes", jr}};
   if (s->dist[k] >= INF) {
     set<int> stack;
