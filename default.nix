@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
-{ lib, stdenv, zlib, libpng, nlohmann_json, sqlite, libzip, emscripten }:
+{ lib, stdenv, zlib, libpng, nlohmann_json, sqlite, libzip, emscripten, python3, makeWrapper }:
 
 let
-  mkApp = { pname, buildInputs ? [ ], extraInstall ? "", description }:
+  mkApp = { pname, buildInputs ? [ ], nativeBuildInputs ? [ ], extraInstall ? "", description }:
     stdenv.mkDerivation {
-      inherit pname buildInputs;
+      inherit pname buildInputs nativeBuildInputs;
       version = "0.1.0";
       src = lib.cleanSource ./.;
       enableParallelBuilding = true;
@@ -41,6 +41,13 @@ in
   pollution-exporter = mkApp {
     pname = "pollution-exporter";
     buildInputs = [ zlib libpng nlohmann_json ];
+    nativeBuildInputs = [ makeWrapper ];
+    extraInstall = ''
+      install -Dm644 full_plan.py $out/share/pollution-exporter/full_plan.py
+      wrapProgram $out/bin/pollution-exporter \
+        --set FOODS_OPTIMIZER $out/share/pollution-exporter/full_plan.py \
+        --set FOODS_PYTHON ${python3.withPackages (ps: [ ps.scipy ])}/bin/python3
+    '';
     description = "Prometheus exporter for GTNH pollution";
   };
 

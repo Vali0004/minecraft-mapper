@@ -335,6 +335,9 @@ public class TextureDump {
       GL11.glClear(GL11.GL_COLOR_BUFFER_BIT | GL11.GL_DEPTH_BUFFER_BIT);
       int end = Math.min(keys.size(), start + BATCH);
       for (int i = start; i < end; i++) {
+        // These inventory renderers require a world or player and throw at the main menu
+        if (keys.get(i).equals("WitchingGadgets:WG_MetalDevice:0") || keys.get(i).equals("ThaumicHorizons:synthNode:0") ||
+            keys.get(i).startsWith("Thaumcraft:blockCrystal:")) continue;
         int x = ((i - start) % PER_ROW) * CELL, y = ((i - start) / PER_ROW) * CELL;
         Object w = what.get(i);
         // every item starts from the same state: some renderers change state and don't put it back

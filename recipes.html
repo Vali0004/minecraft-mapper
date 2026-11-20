@@ -391,6 +391,61 @@ function blockerTree(b, depth = 0) {
 }
 let lastRoute = null;
 
+function optimizedHowTo(r) {
+  const result = [];
+  const opt = r.optimized;
+  const note = el("div", "card hint", `Whole-plan search compared ${opt.candidates} recipe variants. This is the cheapest executable plan in that set, including shared stock, machine builds and energy.`);
+  result.push(note);
+  if (opt.steps.some(step => opt.recipes[step.recipe].out.some(output => output[2] < 10000)))
+    result.push(el("div", "card hint", "Some recipe outputs have a chance of occurring. The quantities shown use average yields, so you may need more runs."));
+  const gather = Object.entries(opt.gather || {}).filter(([, n]) => n > 0);
+  if (gather.length) {
+    const card = el("div", "card"), grid = el("div", "needs");
+    card.append(el("div", "muted", "Gather before starting"));
+    for (const [k, n] of gather.sort((a, b) => name(a[0]).localeCompare(name(b[0])))) {
+      const row = el("div", "need"), t = el("div", "t");
+      t.append(el("div", "nm", name(k)), el("div", "ct short", amount(k, n)));
+      row.append(slot(k, 0), t);
+      grid.append(row);
+    }
+    card.append(grid);
+    result.push(card);
+  }
+  const held = Object.entries(opt.stock).filter(([, n]) => n > 0);
+  if (held.length) {
+    const card = el("div", "card"), grid = el("div", "needs");
+    card.append(el("div", "muted", "You'll use from storage"));
+    for (const [k, n] of held.sort((a, b) => name(a[0]).localeCompare(name(b[0])))) {
+      const row = el("div", "need"), t = el("div", "t");
+      t.append(el("div", "nm", name(k)), el("div", "ct", amount(k, n)));
+      row.append(slot(k, 0), t);
+      grid.append(row);
+    }
+    card.append(grid);
+    result.push(card);
+  }
+  const ol = el("ol", "steps");
+  opt.steps.forEach((step, i) => {
+    const rc = opt.recipes[step.recipe], uses = step.uses, times = step.runs;
+    const made = step.made;
+    const output = rc.out.filter(o => o[0] === made).reduce((n, o) => n + o[1] * o[2] / 10000, 0);
+    const li = el("li", "step"), head = el("div", "head");
+    head.append(el("span", "num", i + 1), el("span", "what", `Make ${amount(made, output * times)} ${name(made)}`));
+    const how = [machine(rc)];
+    if (power(rc)) how.push(power(rc));
+    head.append(el("span", "how", how.join(" · ")));
+    const circ = uses.find(u => circuitOf(u) !== null);
+    if (circ) head.append(circuitChip(circ));
+    if (times > 1) head.append(el("span", "chip", `do it ${times}×`));
+    li.append(head);
+    li.append(drawRecipe(rc, uses.map((u, j) => [u, rc.in[j], { kept: rc.in[j] === 0 }]), 1));
+    if (times > 1) li.append(el("div", "muted", `Shown for one run, it makes ${rc.out.map(o => `${amount(o[0], o[1])} ${name(o[0])}`).join(", ")}.`));
+    ol.append(li);
+  });
+  result.push(ol);
+  return result;
+}
+
 function howTo(r, key, qty) {
   const parts = [];
   const route = r.route, root = route.nodes[key];
@@ -413,6 +468,9 @@ function howTo(r, key, qty) {
     note.append(details);
     parts.push(note);
   }
+  if (r.optimized?.status === "optimal") return [...parts, ...optimizedHowTo(r)];
+  if (r.optimized && !r.blockers)
+    parts.push(el("div", "card hint", "The whole-plan search could not prove an executable result for this request. The route below is an estimate from the existing planner."));
   const p = plan(route, key, qty, r.have || {});
   if (p.chance.size) parts.push(el("div", "card hint", "Some outputs have a chance of occurring. Run counts and ingredients are estimates based on average yield. You may need more runs."));
   // the target is always made, what's held of it is only said

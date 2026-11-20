@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
@@ -1061,6 +1063,204 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
   }
 }
 
+// Run the integer model in a separate process so a slow search cannot hold the exporter indefinitely.
+json solve_full_problem(const json &problem) {
+  const char *script = getenv("FOODS_OPTIMIZER");
+  string path = script ? script : "full_plan.py";
+  if (!filesystem::exists(path)) return nullptr;
+  char filename[] = "/tmp/foods-plan-XXXXXX";
+  int input = mkstemp(filename);
+  if (input < 0) return nullptr;
+  string body = problem.dump();
+  size_t offset = 0;
+  while (offset < body.size()) {
+    ssize_t n = write(input, body.data() + offset, body.size() - offset);
+    if (n <= 0) { close(input); unlink(filename); return nullptr; }
+    offset += n;
+  }
+  lseek(input, 0, SEEK_SET);
+  int output[2];
+  if (pipe(output) != 0) { close(input); unlink(filename); return nullptr; }
+  pid_t child = fork();
+  if (child == 0) {
+    dup2(input, STDIN_FILENO);
+    dup2(output[1], STDOUT_FILENO);
+    close(output[0]);
+    close(output[1]);
+    close(input);
+    const char *python = getenv("FOODS_PYTHON");
+    execlp(python ? python : "python3", python ? python : "python3", path.c_str(), (char *)nullptr);
+    _exit(127);
+  }
+  close(input);
+  close(output[1]);
+  unlink(filename);
+  if (child < 0) { close(output[0]); return nullptr; }
+  string result;
+  char buffer[8192];
+  for (ssize_t n; (n = read(output[0], buffer, sizeof(buffer))) > 0;)
+    if (result.size() + n < 10000000) result.append(buffer, n);
+  close(output[0]);
+  int status = 0;
+  waitpid(child, &status, 0);
+  if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) return nullptr;
+  try { return json::parse(result); } catch (...) { return nullptr; }
+}
+
+// Give the optimizer the tree's recipes, nearby alternatives, and the ingredients they lead to.
+// Its result is exact for this finite candidate set. A candidate cap keeps page requests responsive.
+json full_plan(const Solved &s, const FoodGroup *g, int target, double qty, int force,
+               const json &nodes, set<int> &named) {
+  if (nodes.empty() || cost_of(s, target) >= INF) return nullptr;
+  json problem = {{"demand", {{keys[target], qty}}}, {"recipes", json::array()},
+                  {"held", json::object()}, {"value", json::object()}, {"free", json::array()},
+                  {"gather", json::object()}, {"time_limit", 8}, {"allow_missing", false}};
+  struct Variant { int r; vector<int> uses; int made; };
+  map<string, Variant> variants;
+  vector<pair<int, int>> queue;
+  set<int> visited;
+  for (auto &[key, node] : nodes.items())
+    if (auto f = key_index.find(key); f != key_index.end() && !wild[f->second]) queue.emplace_back(f->second, 0);
+  if (queue.empty()) return nullptr;
+  set<int> route_items;
+  for (auto [item, depth] : queue) route_items.insert(item);
+  auto available = [&](int a, const Slot &slot) {
+    return !wild[a] && cost_of(s, a) < INF && usable(s, slot, a);
+  };
+  auto add_variant = [&](int r, int made, const vector<int> &uses) {
+    if (variants.size() >= 1800) return;
+    string id = to_string(r);
+    for (int a : uses) id += ":" + to_string(a);
+    if (variants.count(id)) return;
+    const Recipe &rc = recipes[r];
+    json in = json::object(), out = json::object(), tools = json::array();
+    for (size_t i = 0; i < rc.in.size(); i++) {
+      int a = uses[i];
+      if (a < 0) continue;
+      if (!route_items.count(a) && held_of(g, a) <= 0 && !s.free[a]) return;
+      if (rc.in[i].count > 0) in[keys[a]] = in.value(keys[a], 0) + rc.in[i].count;
+      else if (!circuit_key[a]) tools.push_back(keys[a]);
+    }
+    for (auto &o : rc.out)
+      if (o.chance > 0) out[keys[o.key]] = out.value(keys[o.key], 0.0) + o.amount * o.chance / 10000.0;
+    if (out.empty()) return;
+    json v = {{"id", id}, {"in", in}, {"out", out}, {"tools", tools},
+              {"run_cost", (types[rc.type] == "smelting" ? FURNACE_RUN : 0) + max(rc.eut, 0) * rc.ticks * EU},
+              {"setup_cost", automated(s, rc) ? 0 : STEP}, {"max_runs", 100000}};
+    if (!owns(s, rc)) {
+      int m = machine_to_build(s, rc);
+      if (m < 0) return;
+      if (!route_items.count(m) && held_of(g, m) <= 0) return;
+      v["machine"] = keys[m];
+    }
+    problem["recipes"].push_back(v);
+    variants.emplace(id, Variant{r, uses, made});
+  };
+  for (size_t pos = 0; pos < queue.size() && visited.size() < 900 && variants.size() < 1800; pos++) {
+    auto [item, depth] = queue[pos];
+    if (!visited.insert(item).second) continue;
+    if (auto n = nodes.find(keys[item]); n != nodes.end() && n->size() >= 3 && !(*n)[0].is_null() && (*n)[1].get<int>() >= 0) {
+      int r = (*n)[1].get<int>();
+      vector<int> uses;
+      for (auto &u : (*n)[2]) {
+        if (u.is_null()) { uses.push_back(-1); continue; }
+        int a = key_index[u.get<string>()];
+        if (wild[a]) {
+          auto w = nodes.find(keys[a]);
+          if (w != nodes.end() && w->size() >= 3 && (*w)[1].get<int>() == -1)
+            a = key_index[(*w)[2][0].get<string>()];
+        }
+        uses.push_back(wild[a] ? -1 : a);
+      }
+      bool complete = uses.size() == recipes[r].in.size();
+      if (complete)
+        for (size_t i = 0; i < uses.size(); i++)
+          if (uses[i] < 0 && !recipes[r].in[i].alts.empty()) complete = false;
+      if (complete && allowed(s, r) && machine_ok(s, recipes[r])) add_variant(r, item, uses);
+    }
+    vector<pair<double, int>> choices;
+    for (int r : made_by[item]) {
+      if (!allowed(s, r) || !machine_ok(s, recipes[r])) continue;
+      if (item == target && force >= 0 && r != force) continue;
+      double c = route_score(s, recipes[r], item, item == target ? qty : 0);
+      if (c < INFINITY) choices.emplace_back(c, r);
+    }
+    sort(choices.begin(), choices.end());
+    int limit = 3;
+    int chosen = 0;
+    for (auto [cost, r] : choices) {
+      if (chosen++ >= limit) break;
+      const Recipe &rc = recipes[r];
+      vector<int> uses;
+      vector<pair<size_t, int>> substitutions;
+      bool ok = true;
+      for (size_t i = 0; i < rc.in.size(); i++) {
+        const Slot &slot = rc.in[i];
+        if (slot.alts.empty()) { uses.push_back(-1); continue; }
+        vector<pair<double, int>> alts;
+        for (int a : slot.alts) {
+          if (available(a, slot)) alts.emplace_back(raw_of(s, a), a);
+          else if (wild[a])
+            for (int concrete : keys_of_name[name_of[a]])
+              if (available(concrete, slot)) alts.emplace_back(raw_of(s, concrete), concrete);
+        }
+        sort(alts.begin(), alts.end());
+        alts.erase(unique(alts.begin(), alts.end(), [](auto a, auto b) { return a.second == b.second; }), alts.end());
+        if (alts.empty()) { ok = false; break; }
+        uses.push_back(alts[0].second);
+        if (alts.size() > 1) substitutions.emplace_back(i, alts[1].second);
+      }
+      if (!ok) continue;
+      add_variant(r, item, uses);
+      for (auto [slot, alt] : substitutions) {
+        vector<int> changed = uses;
+        changed[slot] = alt;
+        add_variant(r, item, changed);
+      }
+    }
+  }
+  if (variants.empty()) return json{{"status", "no_candidates"}};
+  set<int> involved{target};
+  for (auto &[id, v] : variants) {
+    const Recipe &rc = recipes[v.r];
+    for (int a : v.uses) if (a >= 0) involved.insert(a);
+    for (auto &o : rc.out) involved.insert(o.key);
+    if (!owns(s, rc)) involved.insert(machine_to_build(s, rc));
+  }
+  for (int item : involved) {
+    if (item < 0) continue;
+    double held = item == target ? 0 : held_of(g, item);
+    if (held > 0) problem["held"][keys[item]] = held;
+    problem["value"][keys[item]] = s.value[item] > 0 ? s.value[item] :
+                                      keys[item].starts_with("fluid:") ? MB : ITEM;
+    if (s.free[item]) problem["free"].push_back(keys[item]);
+    if (item != target && !s.free[item] && !circuit_key[item] && made_by[item].empty())
+      problem["gather"][keys[item]] = PRECIOUS * problem["value"][keys[item]].get<double>();
+  }
+  json result = solve_full_problem(problem);
+  if (!result.is_object()) return json{{"status", "unavailable"}};
+  if (result.value("status", "") != "optimal") return json{{"status", result.value("status", "unavailable")}};
+  json steps = json::array(), jr = json::object();
+  for (auto &step : result["order"]) {
+    string id = step["id"].get<string>();
+    auto it = variants.find(id);
+    if (it == variants.end()) return nullptr;
+    const Variant &v = it->second;
+    json uses = json::array();
+    for (int a : v.uses) {
+      uses.push_back(a < 0 ? json(nullptr) : json(keys[a]));
+      if (a >= 0) named.insert(a);
+    }
+    steps.push_back({{"recipe", v.r}, {"uses", uses}, {"runs", step["runs"]}, {"made", keys[v.made]}});
+    if (!jr.contains(to_string(v.r))) jr[to_string(v.r)] = recipe_json(v.r, named);
+    named.insert(v.made);
+  }
+  json optimized = {{"status", "optimal"}, {"cost", result["cost"]}, {"steps", steps},
+                    {"stock", result["stock"]}, {"gather", result["missing"]},
+                    {"recipes", jr}, {"candidates", variants.size()}};
+  return optimized;
+}
+
 // how far k is from being makeable: 0 when it is, otherwise roughly how many things are missing underneath its
 // closest recipe, a few levels down (a recipe needing what it's making counts as hopeless)
 struct Missing {
@@ -1303,7 +1503,7 @@ struct MissingPlan {
             if (slot.count <= 0 || slot.alts.empty()) continue;
             bool can_use_raw = false;
             for (int a : slot.alts)
-              if (cost_of(s, a) == 0 || !processed_form(a)) can_use_raw = true;
+              if (!processed_form(a)) can_use_raw = true;
             if (!can_use_raw) scraps_form = true;
           }
         if (scraps_form) continue;
@@ -1910,6 +2110,10 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     out["route_limits"] = json::array();
     for (int item : path.limited) if (nodes.contains(keys[item])) out["route_limits"].push_back(keys[item]);
     out["route_horizon"] = path.horizon;
+  }
+  if (s->dist[k] < INF && !forced) {
+    json optimized = full_plan(*build, gp, k, qty, -1, nodes, named);
+    if (optimized.is_object()) out["optimized"] = move(optimized);
   }
   out["qty"] = qty;
   // steps the team's crafting modules do by themselves
