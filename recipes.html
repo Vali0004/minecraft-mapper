@@ -403,6 +403,15 @@ function howTo(r, key, qty) {
     parts.push(card);
     return parts;
   }
+  if (r.blockers) {
+    const note = el("div", "card hint");
+    note.append("This is a possible path. Some ingredients or machines are missing, so the steps cannot all be done yet.");
+    const details = el("details"), summary = el("summary", null, "Why this path is blocked"), ul = el("ul");
+    ul.append(blockerTree(r.blockers));
+    details.append(summary, ul);
+    note.append(details);
+    parts.push(note);
+  }
   const p = plan(route, key, qty, r.have || {});
   if (p.chance.size) parts.push(el("div", "card hint", "Some outputs have a chance of occurring. Run counts and ingredients are estimates based on average yield; you may need more runs."));
   // the target is always made, what's held of it is only said

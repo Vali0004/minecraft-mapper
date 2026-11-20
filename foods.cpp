@@ -1026,8 +1026,11 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     if (!ok) break;
     double total = plan_total(s, g, k, qty, n2, r2);
     set<int> more = short_of(g, k, qty, n2, r2);
-    for (auto &[key, n] : n2.items())
-      if (key_index[key] != k && n.size() >= 4 && n[3].value("partial", false)) more.insert(key_index[key]);
+    // First resolve things the plan still lacks. Avoiding every top-up at once can discard a good route
+    // (held soldering alloy plus one extracted ingot) while the retries repair unrelated shortages.
+    if (more.empty())
+      for (auto &[key, n] : n2.items())
+        if (key_index[key] != k && n.size() >= 4 && n[3].value("partial", false)) more.insert(key_index[key]);
     // short: the odds and ends it reached for won't do either (4 steel plates, then 3 nuggets, then a chain
     // helmet...), a plan takes one source per ingredient. avoid every small held stock it used at once, so the
     // next round looks for a real source (iron dust into the blast furnace)
@@ -1146,6 +1149,109 @@ json blockers(const Solved &s, int k, int depth, set<int> &stack) {
   out["missing"] = missing;
   return out;
 }
+
+// An unreachable item still has useful recipes. Follow the closest ones as far as possible so the page can
+// show a quantity-aware path, with unavailable ingredients as leaves, instead of only a nested blocker report.
+struct MissingPlan {
+  const Solved &s;
+  json &nodes, &jr;
+  set<int> &named;
+  Missing missing;
+  set<int> stack, seen;
+  vector<int> added;
+  int budget = 500;
+
+  void put(int k, json n) {
+    nodes[keys[k]] = move(n);
+    seen.insert(k);
+    added.push_back(k);
+    named.insert(k);
+  }
+  void back_to(size_t mark) {
+    while (added.size() > mark) {
+      int k = added.back();
+      nodes.erase(keys[k]);
+      seen.erase(k);
+      added.pop_back();
+    }
+  }
+  int distance(int k) {
+    if (cost_of(s, k) < INF) return 0;
+    missing.stack = stack;
+    return missing.key(k, 3);
+  }
+  bool add(int k, int depth = 0) {
+    if (seen.count(k)) return true;
+    if (stack.count(k)) return false;
+    if (--budget < 0 || depth >= 28 || (made_by[k].empty() && !wild[k])) {
+      put(k, {nullptr});
+      return true;
+    }
+    if (cost_of(s, k) == 0) {
+      put(k, {0});
+      return true;
+    }
+    stack.insert(k);
+    if (wild[k]) {
+      vector<int> choices;
+      for (int a : keys_of_name[name_of[k]]) if (!wild[a]) choices.push_back(a);
+      stable_sort(choices.begin(), choices.end(), [&](int a, int b) { return distance(a) < distance(b); });
+      for (int a : choices)
+        if (add(a, depth + 1)) {
+          put(k, {1, -1, json::array({keys[a]})});
+          stack.erase(k);
+          return true;
+        }
+    } else {
+      vector<int> choices;
+      bool preferred = s.cheapest[k] >= 0 && allowed(s, s.cheapest[k]);
+      if (preferred) choices.push_back(s.cheapest[k]);
+      for (int r : missing.order(k)) if (allowed(s, r) && find(choices.begin(), choices.end(), r) == choices.end()) choices.push_back(r);
+      stable_sort(choices.begin() + (preferred ? 1 : 0), choices.end(), [&](int a, int b) {
+        missing.stack = stack;
+        int ca = missing.recipe(a, 3);
+        missing.stack = stack;
+        int cb = missing.recipe(b, 3);
+        return ca < cb;
+      });
+      for (int r : choices) {
+        size_t mark = added.size();
+        json uses = json::array(), extra = json::object();
+        bool ok = true;
+        for (auto &slot : recipes[r].in) {
+          if (slot.alts.empty()) { uses.push_back(nullptr); continue; }
+          vector<int> alts = slot.alts;
+          stable_sort(alts.begin(), alts.end(), [&](int a, int b) { return distance(a) < distance(b); });
+          bool found = false;
+          for (int a : alts)
+            if (usable(s, slot, a) && add(a, depth + 1)) { uses.push_back(keys[a]); found = true; break; }
+          if (!found) { ok = false; break; }
+        }
+        if (ok && !owns(s, recipes[r])) {
+          int need = recipes[r].eut > 0 ? tier_for(recipes[r].eut) : 0;
+          vector<int> machines;
+          for (auto &m : machine_items[recipes[r].type]) if (m.tier >= need) machines.push_back(m.key);
+          stable_sort(machines.begin(), machines.end(), [&](int a, int b) { return distance(a) < distance(b); });
+          ok = false;
+          for (int m : machines)
+            if (add(m, depth + 1)) { extra["machine"] = keys[m]; ok = true; break; }
+        }
+        if (ok) {
+          json n = {1, r, uses};
+          if (!extra.empty()) n.push_back(extra);
+          put(k, move(n));
+          if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
+          stack.erase(k);
+          return true;
+        }
+        back_to(mark);
+      }
+    }
+    stack.erase(k);
+    put(k, {nullptr});
+    return true;
+  }
+};
 
 // a group's solve for the current snapshot, kept until the next one. call with state_lock held
 // build: may plan building missing machines (the recipe pages). the food planner counts only what can be made now
@@ -1628,6 +1734,11 @@ string recipes_item_json(const string &key, const string &group, int force, doub
       named.insert(build_named.begin(), build_named.end());
       s = build;
     }
+  }
+  if (s->dist[k] >= INF) {
+    nodes = json::object(), jr = json::object();
+    MissingPlan path{*s, nodes, jr, named, Missing{*s}};
+    path.add(k);
   }
   out["qty"] = qty;
   // steps the team's crafting modules do by themselves
