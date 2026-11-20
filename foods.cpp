@@ -1804,9 +1804,9 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     // make more dust from gallium and arsenic, not dismantling a finished component.
     if (key == "gregtech:gt.metaitem.03:32190" || key == "gregtech:gt.metaitem.03:32191")
       return (bool)(assembled[k] = 0);
-    // GregTech's placed frames, casings, pipes, cables and machines are built things even when made from one
-    // material (macerating a steel frame back to dust is scrapping it).
-    if (key.starts_with("IC2:blockMiningPipe:") || key.starts_with("IC2:blockMiningTip:") ||
+    // Machine parts and casts are built things even when made from one material.
+    if (key.starts_with("TConstruct:metalPattern:") || key.starts_with("TConstruct:blankPattern:") ||
+        key.starts_with("IC2:blockMiningPipe:") || key.starts_with("IC2:blockMiningTip:") ||
         key.starts_with("gregtech:gt.blockmachines") || key.starts_with("gregtech:gt.blockframes") ||
         key.starts_with("gregtech:gt.blockcasings")) return (bool)(assembled[k] = 1);
     bool any = false;
