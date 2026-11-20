@@ -514,7 +514,9 @@ json recipe_json(int r, set<int> &named) {
   json j = {{"t", types[rc.type]}, {"eut", rc.eut}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
   if (rc.w > 0) j["w"] = rc.w, j["h"] = rc.h;
   if (auto m = machine_names.find(types[rc.type]); m != machine_names.end()) j["machine"] = m->second;
-  if (recycling[r]) j["recycling"] = true;
+  // only what plans won't use (a breakdown machine scrapping something assembled), not every recipe the loose
+  // recycling check flags (an assembler putting logistics pipes into a chassis)
+  if (!plannable[r]) j["recycling"] = true;
   return j;
 }
 
@@ -1319,7 +1321,7 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     }
     bool ok = machine_ok(*build, rc) && worst < INF;
     // real recipes before ones taking something apart
-    order.emplace_back((ok ? 0 : machine_ok(*build, rc) ? 1 : 2) * 2 + recycling[r], worst, rc.eut, r);
+    order.emplace_back((ok ? 0 : machine_ok(*build, rc) ? 1 : 2) * 2 + !plannable[r], worst, rc.eut, r);
   }
   sort(order.begin(), order.end());
   json producers = json::array();
