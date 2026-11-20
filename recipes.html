@@ -25,8 +25,9 @@ a { color: var(--accent); }
 .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
 .bar input, .bar select, input.qty, .sort { font: inherit; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); }
 .bar input { flex: 1; min-width: 200px; }
-.layout { display: grid; grid-template-columns: 290px 1fr; gap: 20px; align-items: start; }
-@media (max-width: 780px) { .layout { grid-template-columns: 1fr; } }
+.layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 20px; align-items: start; }
+#detail { min-width: 0; }
+@media (max-width: 780px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 .results { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .results button { display: flex; width: 100%; gap: 10px; align-items: center; text-align: left; padding: 6px 10px; border: 0;
   border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; cursor: pointer; }
@@ -55,7 +56,7 @@ a { color: var(--accent); }
 input.qty { width: 110px; padding: 6px 10px; }
 
 /* what you need */
-.needs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+.needs { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); gap: 6px 14px; }
 .need { display: flex; gap: 10px; align-items: center; min-width: 0; }
 .need .t { min-width: 0; flex: 1; }
 .need .nm { overflow-wrap: anywhere; }
@@ -65,12 +66,12 @@ input.qty { width: 110px; padding: 6px 10px; }
 
 /* steps */
 .steps { counter-reset: step; list-style: none; padding: 0; margin: 0; }
-.step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; min-width: 0; }
 .step .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .step .num { background: var(--accent); color: var(--bg); border-radius: 999px; min-width: 26px; height: 26px; display: inline-grid; place-items: center; font-weight: 700; font-size: 14px; }
-.step .what { font-weight: 600; }
+.step .what { font-weight: 600; overflow-wrap: anywhere; }
 .step .how { color: var(--muted); font-size: 13px; }
-.chip { border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; background: var(--held-soft); color: var(--held); }
+.chip { border-radius: 999px; padding: 1px 9px; font-size: 12px; max-width: 100%; overflow-wrap: anywhere; background: var(--held-soft); color: var(--held); }
 .chip.pick { background: var(--accent-soft); color: var(--accent); }
 .chip.circuit { background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; font-weight: 600; }
 .icon.circuiticon { align-self: center; }
@@ -80,9 +81,9 @@ input.qty { width: 110px; padding: 6px 10px; }
 .slot.circuitslot .n { font-size: 13px; }
 
 /* a recipe drawn like the game: slots, an arrow, the result */
-.recipe { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.recipe { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; min-width: 0; }
 .grid { display: grid; grid-template-columns: repeat(3, 40px); gap: 2px; }
-.row { display: flex; gap: 2px; flex-wrap: wrap; max-width: 380px; }
+.row { display: flex; gap: 2px; flex-wrap: wrap; max-width: min(380px, 100%); }
 .slot { width: 40px; height: 40px; background: var(--slot); position: relative; display: grid; place-items: center;
   box-shadow: inset 2px 2px 0 var(--slot-dark), inset -2px -2px 0 var(--slot-light); }
 .slot.fluid { border-radius: 6px; }
@@ -118,10 +119,10 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .tree ul { list-style: none; margin: 6px 0 0; padding-left: 18px; border-left: 1px solid var(--line); }
 .tree li { margin: 4px 0; font-size: 14px; }
 .via { color: var(--muted); font-size: 12px; }
-.hint { background: var(--held-soft); border-color: transparent; color: var(--text); font-size: 14px; }
+.hint { background: var(--held-soft); border-color: transparent; color: var(--text); font-size: 14px; overflow-wrap: anywhere; }
 /* a recipe in words, under its picture */
 .words { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--muted); }
-.words .w { color: var(--text); white-space: nowrap; }
+.words .w { color: var(--text); overflow-wrap: anywhere; }
 .words .w.missing { color: var(--bad); }
 .words .w.kept { color: var(--held); }
 .words .w button { all: unset; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
@@ -132,6 +133,18 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .alt.off { opacity: .55; }
 .hint button { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; }
 .note { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 13px; }
+@media (max-width: 600px) {
+  main { padding: 16px 10px 48px; }
+  .bar input { min-width: 0; flex-basis: 100%; }
+  .card { padding: 12px; }
+  .step { padding: 12px; }
+  .step .head { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: start; gap: 5px 8px; }
+  .step .head > :not(.num) { grid-column: 2; }
+  .step .num { grid-column: 1; grid-row: 1; }
+  .recipe { gap: 8px; }
+  .words { overflow-wrap: anywhere; }
+  .results { max-height: 240px; overflow-y: auto; }
+}
 </style>
 </head>
 <body>
@@ -325,7 +338,6 @@ async function search() {
   }), ...(r.total > r.results.length ? [el("p", "empty", `${r.total - r.results.length} more, narrow the search`)] : []));
 }
 
-// the plan: which recipe makes what, in which order, how many times, from how much of what you have
 // the plan: which recipe makes what, in which order, how many times, from how much of what you have. a node is
 // [steps] when held, [steps, recipe, uses, extra?] when made (extra.machine: a machine to build first,
 // extra.partial: some is held, make the rest), [steps, -1, [key]] for "any damage" made as a specific one
@@ -363,7 +375,24 @@ function plan(route, target, qty, have) {
   }
   const step = new Map(order.map((k, i) => [k, i + 1]));
   const leaves = [...need.keys()].filter(k => !made(k) || fromStore.get(k) > 0);
-  return { order, need, runs, tools, machines, step, leaves, canon, fromStore, extra, chance };
+  const blocked = new Map();
+  if (route.provisional) for (const k of order) {
+    const reasons = new Set();
+    for (const u of N[k][2]) {
+      if (!u) continue;
+      const c = canon(u);
+      if (blocked.has(c)) for (const reason of blocked.get(c)) reasons.add(reason);
+      else if (N[c]?.[0] === null && (have[c] || 0) < (need.get(c) || 1)) reasons.add(c);
+    }
+    const m = extra(k).machine;
+    if (m) {
+      const c = canon(m);
+      if (blocked.has(c)) for (const reason of blocked.get(c)) reasons.add(reason);
+      else if (N[c]?.[0] === null && (have[c] || 0) < 1) reasons.add(c);
+    } else if (extra(k).missing_machine) reasons.add(`machine: ${extra(k).missing_machine}`);
+    if (reasons.size) blocked.set(k, reasons);
+  }
+  return { order, need, runs, tools, machines, step, leaves, canon, fromStore, extra, chance, blocked };
 }
 
 // why it can't be made: the closest recipe, what it lacks, and the same for each of those
@@ -438,8 +467,7 @@ function optimizedHowTo(r) {
     if (circ) head.append(circuitChip(circ));
     if (times > 1) head.append(el("span", "chip", `do it ${times}×`));
     li.append(head);
-    li.append(drawRecipe(rc, uses.map((u, j) => [u, rc.in[j], { kept: rc.in[j] === 0 }]), 1));
-    if (times > 1) li.append(el("div", "muted", `Shown for one run, it makes ${rc.out.map(o => `${amount(o[0], o[1])} ${name(o[0])}`).join(", ")}.`));
+    li.append(drawRecipe(rc, uses.map((u, j) => [u, rc.in[j], { kept: rc.in[j] === 0 }]), times));
     ol.append(li);
   });
   result.push(ol);
@@ -460,7 +488,14 @@ function howTo(r, key, qty) {
   }
   if (r.blockers) {
     const note = el("div", "card hint");
-    note.append("This is a possible recipe path, not a complete shopping list. It stops at missing materials or machines, and its quantities may change once those paths are known.");
+    const missingMachines = new Set(Object.values(route.nodes).filter(n => n.length > 3 && n[3]?.missing_machine && !n[3]?.machine)
+      .map(n => `${n[3].missing_machine}${n[3].missing_tier >= 0 ? ` at ${TIERS[n[3].missing_tier]}` : ""}`));
+    note.append("This is a possible recipe path. Gather its raw ingredients and resolve its machine prerequisites before following the steps. Quantities may change when those build paths are known.");
+    if (missingMachines.size) {
+      const machineNote = el("div", "ct short");
+      machineNote.append(`Machine builds missing from this plan: ${[...missingMachines].join(", ")}.`);
+      note.append(machineNote);
+    }
     if (r.route_limits?.length) note.append(` Search stopped at ${r.route_limits.length} ${r.route_limits.length === 1 ? "item" : "items"} because the path is too deep, too large, or requires more than ${TIERS[r.route_horizon]}. Open those items to inspect their own routes.`);
     const details = el("details"), summary = el("summary", null, "Why this path is blocked"), ul = el("ul");
     ul.append(blockerTree(r.blockers));
@@ -528,6 +563,8 @@ function howTo(r, key, qty) {
       }
       t.append(o);
     }
+    if (route.provisional && route.nodes[k]?.[0] === null)
+      t.append(el("div", "ct short", "Gather this externally or inspect its own recipe page."));
     row.append(slot(k, 0), t);
     grid.append(row);
   }
@@ -568,7 +605,8 @@ function howTo(r, key, qty) {
     const li = el("li", "step"), head = el("div", "head");
     const isMachine = p.machines.has(k);
     const making = p.need.get(k) - (p.fromStore.get(k) || 0);
-    head.append(el("span", "num", i + 1), el("span", "what", `${isMachine ? "Build" : "Make"} ${amount(k, making)} ${name(k)}`));
+    const blocked = p.blocked.get(k);
+    head.append(el("span", "num", i + 1), el("span", "what", `${blocked ? "Blocked path to" : isMachine ? "Build" : "Make"} ${amount(k, making)} ${name(k)}`));
     const how = [machine(rc)];
     if (power(rc)) how.push(power(rc));
     if (route.provisional && rc.eut > 0 && rc.ticks > 0)
@@ -590,6 +628,17 @@ function howTo(r, key, qty) {
     if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
     if (p.extra(k).auto) head.append(el("span", "chip pick", "your crafting module makes this"));
     li.append(head);
+    if (blocked) {
+      const reason = el("div", "ct short");
+      reason.append("Cannot complete this step with the current sources and machines. Needs ");
+      [...blocked].slice(0, 3).forEach((missing, j) => {
+        if (j) reason.append(", ");
+        if (missing.startsWith("machine: ")) reason.append(missing.slice(9));
+        else reason.append(`${amount(missing, p.need.get(missing) || 1)} ${name(missing)}`);
+      });
+      if (blocked.size > 3) reason.append(` and ${blocked.size - 3} more`);
+      li.append(reason);
+    }
     const ins = uses.map((u, j) => {
       if (!u) return [null, 0];
       const c = p.canon(u);
@@ -597,8 +646,7 @@ function howTo(r, key, qty) {
       // circuits for a machine the plan builds) comes from what's held, no tag
       return [c, rc.in[j], { tag: p.step.has(c) && p.step.get(c) < i + 1 ? `${p.step.get(c)}` : "", kept: rc.in[j] === 0 }];
     });
-    li.append(drawRecipe(rc, ins, 1));
-    if (times > 1) li.append(el("div", "muted", `Shown for one run, it makes ${rc.out.filter(o => o[0] === k).map(o => amount(k, o[1])).join(", ")}.`));
+    li.append(drawRecipe(rc, ins, times));
     ol.append(li);
   });
   parts.push(ol);

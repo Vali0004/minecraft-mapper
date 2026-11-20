@@ -2,13 +2,14 @@
 { lib, stdenv, zlib, libpng, nlohmann_json, sqlite, libzip, emscripten, python3, makeWrapper }:
 
 let
-  mkApp = { pname, buildInputs ? [ ], nativeBuildInputs ? [ ], extraInstall ? "", description }:
+  mkApp = { pname, buildInputs ? [ ], nativeBuildInputs ? [ ], extraPatch ? "", extraInstall ? "", description }:
     stdenv.mkDerivation {
       inherit pname buildInputs nativeBuildInputs;
       version = "0.1.0";
       src = lib.cleanSource ./.;
       enableParallelBuilding = true;
       buildFlags = [ pname ];
+      postPatch = extraPatch;
       installPhase = ''
         runHook preInstall
         install -Dm755 ${pname} $out/bin/${pname}
@@ -42,6 +43,7 @@ in
     pname = "pollution-exporter";
     buildInputs = [ zlib libpng nlohmann_json ];
     nativeBuildInputs = [ makeWrapper ];
+    extraPatch = "rm -f foods.html.inc recipes.html.inc";
     extraInstall = ''
       install -Dm644 full_plan.py $out/share/pollution-exporter/full_plan.py
       wrapProgram $out/bin/pollution-exporter \

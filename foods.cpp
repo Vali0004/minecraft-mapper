@@ -1372,10 +1372,13 @@ struct MissingPlan {
   vector<int> added;
   int budget = 800;
   int horizon = 5;
+  int base_tier = 1;
+  bool strict = true;
 
   bool raw_material(int k) const {
     const string &key = keys[k];
     if (key.starts_with("fluid:")) return true;
+    if (key.starts_with("bartworks:gt.bwMetaGenerateddust")) return true;
     if (!key.starts_with("gregtech:gt.metaitem.01:")) return false;
     int meta = atoi(key.c_str() + key.rfind(':') + 1);
     return meta < 3000 || (meta >= 9000 && meta < 13000);
@@ -1393,6 +1396,7 @@ struct MissingPlan {
   int source_rank(int k) const {
     if (cost_of(s, k) == 0) return -2;
     const string &key = keys[k];
+    if (key.starts_with("bartworks:gt.bwMetaGenerateddust")) return 0;
     if (key.starts_with("gregtech:gt.metaitem.01:")) {
       int meta = atoi(key.c_str() + key.rfind(':') + 1);
       if ((meta >= 2000 && meta < 3000) || (meta >= 11000 && meta < 13000)) return 0;
@@ -1403,14 +1407,14 @@ struct MissingPlan {
     if (key.starts_with("TGregworks:") || key.starts_with("gregtech:gt.block")) return 5;
     return 2;
   }
-  int recipe_rank(int r) const {
+  int recipe_rank(int r, int target) const {
     const string &type = types[recipes[r].type];
     bool cools_plasma = type == "gt.recipe.vacuumfreezer" && any_of(recipes[r].in.begin(), recipes[r].in.end(), [](const Slot &slot) {
       return any_of(slot.alts.begin(), slot.alts.end(), [](int k) { return keys[k].starts_with("fluid:plasma."); });
     });
     int rank = type == "gt.recipe.polarizer" || type == "gt.recipe.vacuumfreezer" ? -10
              : type == "gt.recipe.blastfurnace" ? -8
-             : type == "gt.recipe.mixer" ? -6
+             : type == "gt.recipe.mixer" ? (raw_material(target) ? -30 : -6)
              : type == "gt.recipe.metalbender" ? -5
              : type == "gt.recipe.extruder" ? -3
              : type == "gt.recipe.arcfurnace" || type == "gt.recipe.fluidcanner" ? 8
@@ -1422,8 +1426,8 @@ struct MissingPlan {
       for (int a : slot.alts) best = min(best, source_rank(a));
       rank += best;
     }
-    if (recipes[r].eut > 0 && !owns(s, recipes[r]) && tier_for(recipes[r].eut) >= 6)
-      rank += 40 * (tier_for(recipes[r].eut) - 5);
+    if (recipes[r].eut > 0 && !owns(s, recipes[r]))
+      rank += 8 * max(0, tier_for(recipes[r].eut) - base_tier);
     return rank;
   }
 
@@ -1470,6 +1474,7 @@ struct MissingPlan {
     if (seen.count(k)) return !needs_stack(k);
     if ((int)nodes.size() >= budget || depth >= 64) {
       limited.insert(k);
+      if (strict) return false;
       put(k, {nullptr});
       return true;
     }
@@ -1498,12 +1503,30 @@ struct MissingPlan {
       int beyond = 15;
       for (int r : made_by[k]) if (allowed(s, r)) {
         bool scraps_form = false;
+        const string &type = types[recipes[r].type];
+        if (raw_material(k) && (type == "gt.recipe.centrifuge" || type == "gt.recipe.electrolyzer"))
+          for (auto &slot : recipes[r].in)
+            if (slot.count > 0 && !slot.alts.empty() && all_of(slot.alts.begin(), slot.alts.end(), [&](int a) {
+                  const string &input = keys[a];
+                  return cost_of(s, a) >= INF &&
+                         (input.starts_with("bartworks:gt.bwMetaGenerateddust") ||
+                          input.starts_with("gregtech:gt.metaitem.01:2"));
+                })) scraps_form = true;
         if (raw_material(k))
           for (auto &slot : recipes[r].in) {
             if (slot.count <= 0 || slot.alts.empty()) continue;
             bool can_use_raw = false;
             for (int a : slot.alts)
-              if (!processed_form(a)) can_use_raw = true;
+              if (!processed_form(a)) {
+                bool same_material_ingot = false;
+                if (keys[k].starts_with("gregtech:gt.metaitem.01:") && keys[a].starts_with("gregtech:gt.metaitem.01:")) {
+                  int target_meta = atoi(keys[k].c_str() + keys[k].rfind(':') + 1);
+                  int input_meta = atoi(keys[a].c_str() + keys[a].rfind(':') + 1);
+                  same_material_ingot = target_meta >= 2000 && target_meta < 3000 && input_meta >= 10000 &&
+                                        input_meta < 13000 && target_meta % 1000 == input_meta % 1000 && cost_of(s, a) >= INF;
+                }
+                if (!same_material_ingot) can_use_raw = true;
+              }
             if (!can_use_raw) scraps_form = true;
           }
         if (scraps_form) continue;
@@ -1518,18 +1541,15 @@ struct MissingPlan {
         choices.push_back(r);
       }
       stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
-        return recipe_rank(a) < recipe_rank(b);
-      });
-      if (choices.size() > 40) choices.resize(40);
-      stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
-        int ra = recipe_rank(a), rb = recipe_rank(b);
-        if (ra != rb) return ra < rb;
+        int ra = recipe_rank(a, k), rb = recipe_rank(b, k);
         missing.stack = stack;
         int ca = missing.recipe(a, 3);
         missing.stack = stack;
         int cb = missing.recipe(b, 3);
-        return ca < cb;
+        if (ra + 15 * ca != rb + 15 * cb) return ra + 15 * ca < rb + 15 * cb;
+        return ra < rb;
       });
+      if (choices.size() > 40) choices.resize(40);
       for (int r : choices) {
         size_t mark = added.size();
         json uses = json::array(), extra = json::object();
@@ -1537,10 +1557,22 @@ struct MissingPlan {
         for (auto &slot : recipes[r].in) {
           if (slot.alts.empty()) { uses.push_back(nullptr); continue; }
           vector<int> alts = slot.alts;
-          stable_sort(alts.begin(), alts.end(), [&](int a, int b) { return distance(a) < distance(b); });
+          stable_sort(alts.begin(), alts.end(), [&](int a, int b) {
+            bool held_a = cost_of(s, a) == 0, held_b = cost_of(s, b) == 0;
+            if (held_a != held_b) return held_a;
+            if (display(a) == display(b) && gt_key(a) != gt_key(b)) return gt_key(a);
+            return distance(a) < distance(b);
+          });
           bool found = false;
           for (int a : alts)
-            if (usable(s, slot, a) && add(a, depth + 1)) { uses.push_back(keys[a]); found = true; break; }
+            if (usable(s, slot, a)) {
+              bool duplicate_without_source = !gt_key(a) && cost_of(s, a) >= INF && made_by[a].empty() &&
+                any_of(slot.alts.begin(), slot.alts.end(), [&](int other) {
+                  return gt_key(other) && display(other) == display(a);
+                });
+              if (duplicate_without_source) continue;
+              if (add(a, depth + 1)) { uses.push_back(keys[a]); found = true; break; }
+            }
           if (!found) {
             for (int a : alts) if (stack.count(a)) cycle_failed = true;
             ok = false;
@@ -1583,6 +1615,7 @@ struct MissingPlan {
       }
     }
     stack.erase(k);
+    if (strict) return false;
     put(k, {nullptr});
     return true;
   }
@@ -1749,9 +1782,11 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     if (assembled[k] >= 0) return (bool)assembled[k];
     const string &key = keys[k];
     // fluids are materials (a gas made from air isn't put together), so are GregTech's material items
-    if (key.compare(0, 6, "fluid:") == 0 ||
+    if (key.compare(0, 6, "fluid:") == 0 || key.starts_with("bartworks:gt.bwMetaGenerateddust") ||
         (key.compare(0, 23, "gregtech:gt.metaitem.01") == 0 && atoi(key.c_str() + key.rfind(':') + 1) < 32000))
       return (bool)(assembled[k] = 0);
+    if (key.starts_with("gregtech:gt.metaitem.01:") && atoi(key.c_str() + key.rfind(':') + 1) >= 32000)
+      return (bool)(assembled[k] = 1);
     // GregTech's springs, small springs and superdense plates are made components. Recovering their metal is scrapping.
     if (key.starts_with("gregtech:gt.metaitem.02:")) {
       int meta = atoi(key.c_str() + key.rfind(':') + 1);
@@ -2106,7 +2141,13 @@ string recipes_item_json(const string &key, const string &group, int force, doub
         for (auto &slot : recipes[r].in)
           for (int a : slot.alts) target_tier = max(target_tier, tier_hint(a));
     path.horizon = min(8, max(best_tier + 1, target_tier));
-    path.add(k);
+    path.base_tier = best_tier;
+    if (!path.add(k)) {
+      path.back_to(0);
+      path.stack.clear();
+      path.strict = false;
+      path.add(k);
+    }
     out["route_limits"] = json::array();
     for (int item : path.limited) if (nodes.contains(keys[item])) out["route_limits"].push_back(keys[item]);
     out["route_horizon"] = path.horizon;
