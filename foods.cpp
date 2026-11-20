@@ -953,6 +953,15 @@ double plan_total(const Solved &s, const FoodGroup *g, int k, double qty, const 
       if (want > have[key] && !s.free[kk] && !circuit_key[kk]) used += (want - have[key]) * 1e6;
     } else if (partial) used += min<double>(want, have[key]) * s.value[kk];
   }
+  for (const string &key : p.order) {
+    const json &n = nodes[key];
+    int r = n[1].get<int>(), kk = key_index[key];
+    double per = made_per_run(recipes[r], kk);
+    double want = p.need[key];
+    if (n.size() >= 4 && n[3].value("partial", false)) want = max(0.0, want - have[key]);
+    if (per > 0 && want > 0)
+      used += ceil(want / per - 1e-9) * max(recipes[r].eut, 0) * recipes[r].ticks * EU;
+  }
   return score(used, (int)p.order.size());
 }
 
@@ -1519,8 +1528,8 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   if (!loaded || f == key_index.end()) return "{\"error\":\"unknown item\"}";
   int k = f->second;
   if (qty <= 0) qty = wild[k] || key.compare(0, 6, "fluid:") != 0 ? 1 : 1000;
-  // what can be made with the machines the group has comes first (the same plan the food planner counts), only
-  // when there's no way does the plan build machines
+  // Compare a plan using current machines with one that may build machines. The machine's ingredients and
+  // operating power count in the whole-plan score, so a small batch won't pay for an unnecessary upgrade.
   shared_ptr<Solved> now = solved(group, false, banned), build = solved(group, true, banned);
   shared_ptr<Solved> s = now->dist[k] < INF ? now : build;
   // a recipe picked to plan with that only works by building a machine somewhere along it: plan with building
@@ -1578,9 +1587,9 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     // the same score the plan picks by, from the same solve (the machines the group has, when that works)
     // scored from what the plan uses (the machines the group has, when that works), otherwise with building
     // machines along the way, and then the card says so
-    double c = state / 2 == 0 && allowed(*s, r) ? route_score(*s, recipes[r], k, qty) : INFINITY;
+    double c = state / 2 == 0 && allowed(*now, r) ? route_score(*now, recipes[r], k, qty) : INFINITY;
     if (banned.count(r)) rj["banned"] = true;
-    if (c == INFINITY && state / 2 == 0 && allowed(*build, r) && s != build) {
+    if (c == INFINITY && state / 2 == 0 && allowed(*build, r)) {
       c = route_score(*build, recipes[r], k, qty);
       if (c < INFINITY) rj["needs_build"] = true;
     }
@@ -1597,6 +1606,17 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   auto gi = snapshot.groups.find(group);
   const FoodGroup *gp = gi != snapshot.groups.end() ? &gi->second : nullptr;
   build_plan(*s, gp, k, qty, forced ? force : -1, nodes, jr, named);
+  if (!forced && s == now && build != now) {
+    json build_nodes = json::object(), build_jr = json::object();
+    set<int> build_named;
+    build_plan(*build, gp, k, qty, -1, build_nodes, build_jr, build_named);
+    if (auto root = build_nodes.find(key); root != build_nodes.end() && root->size() >= 3 && !(*root)[0].is_null() &&
+        plan_total(*now, gp, k, qty, build_nodes, build_jr) < plan_total(*now, gp, k, qty, nodes, jr)) {
+      nodes = move(build_nodes), jr = move(build_jr);
+      named.insert(build_named.begin(), build_named.end());
+      s = build;
+    }
+  }
   out["qty"] = qty;
   // steps the team's crafting modules do by themselves
   for (auto &[key2, n] : nodes.items())
