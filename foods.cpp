@@ -608,7 +608,8 @@ struct TreeBuild {
       for (int r : force >= 0 ? vector<int>{force} : candidates(k))
         if ((ok = with(k, r, d))) break;
     }
-    if (ok && make) {
+    // the plan's own target isn't partial: what's held of it doesn't count, it's being made
+    if (ok && make && k != root) {
       json &n = nodes[keys[k]];
       if (n.size() < 4) n.push_back(json::object());
       n[3]["partial"] = true;
@@ -769,7 +770,9 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     b.scarce = &scarce;
     b.root = k;
     b.root_qty = qty;
-    bool ok = b.add(k, force);
+    // the target is made even when some is held: looking it up is wanting more of it. something nothing makes
+    // stays held (or unreachable)
+    bool ok = b.add(k, force, !made_by[k].empty());
     if (!ok && !have_plan) {
       // nothing works around what's short (or the thriftiest picks loop): the old way, short or not
       n2 = json::object(), r2 = json::object(), seen2.clear(), named2.clear();

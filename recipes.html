@@ -396,6 +396,9 @@ function howTo(r, key, qty) {
     return parts;
   }
   const p = plan(route, key, qty, r.have || {});
+  // the target is always made, what's held of it is only said
+  if (p.order.length && (r.have?.[key] ?? 0) > 0)
+    parts.push(el("p", "muted", `${groupName} has ${amount(key, r.have[key])} already, this makes ${amount(key, qty)} more.`));
   if (root[0] === 0 && !p.order.length) {
     const held = r.have[key] ?? 0;
     const why = key === "fluid:water" ? "Water comes from any source" : (r.free || []).includes(key) ? `${groupName}'s boilers make it` : null;
@@ -574,7 +577,7 @@ function render(r, key, qty) {
       open(key, false).then(() => { window.scrollTo({ top: y }); const i = document.querySelector("input.qty"); i?.focus(); });
     }, 400);
   });
-  if (r.route.nodes[key]?.[0] > 0) parts.push(qrow);
+  if (r.route.nodes[key]?.length >= 3) parts.push(qrow);
   parts.push(body);
 
   if (r.producers_total) {
