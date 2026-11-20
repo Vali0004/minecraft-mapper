@@ -149,11 +149,12 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
   </div>
   <p class="note">
     Steps start from what the team has: everything in containers in its claimed chunks and in its members' inventories,
-    ender chests and backpacks. The plan is the route that uses up the least, counted all the way down (an item 1,
-    144 mB of a fluid 1, something held what making another would cost), each step adding 10%, so using what's held
-    beats making an equivalent. Byproducts aren't counted. What's held is used first, what's short is made, and
-    what's short and can't be made is planned around. It uses the team's machines, and builds one only when there's
-    no other way (power isn't planned, nor a multiblock's structure). Nothing gets taken apart, except emptying cells.
+    ender chests and backpacks. The planner estimates material, power and step costs, then checks quantities and
+    retries around shortages. It shows the best route it found, which may not be the cheapest possible route.
+    Byproducts aren't counted. What's held is used first, what's short is made, and what's short and can't be made
+    is planned around. It prefers a working Circuit Assembler to crafting circuits by hand. It uses the team's
+    machines, and builds one only when there's no other way (power generation and a multiblock's structure aren't
+    planned). Nothing gets taken apart, except emptying cells.
     Under "other ways", "plan with this" routes through that recipe instead. Water and GregTech programmed circuits
     (set in the machine) are free. Machines outside GregTech, the crafting grid and the furnace (Forestry,
     Thaumcraft…) aren't known.
@@ -343,9 +344,10 @@ function plan(route, target, qty, have) {
     for (const u of N[k][2]) if (u) dfs(u);
     order.push(k);
   })(target);
-  const need = new Map([[canon(target), qty]]), runs = new Map(), tools = new Set(), machines = new Set(), fromStore = new Map();
+  const need = new Map([[canon(target), qty]]), runs = new Map(), tools = new Set(), machines = new Set(), fromStore = new Map(), chance = new Set();
   for (const k of [...order].reverse()) {
     const [, ri, uses] = N[k], r = R[ri];
+    if (r.out.some(([out, , probability]) => out === k && probability < 10000)) chance.add(k);
     const per = r.out.filter(o => o[0] === k).reduce((a, [, n, c]) => a + n * c / 10000, 0) || 1;
     let want = need.get(k) || 0;
     if (extra(k).partial) { const h = Math.min(have[k] ?? 0, want); fromStore.set(k, h); want -= h; }
@@ -361,7 +363,7 @@ function plan(route, target, qty, have) {
   }
   const step = new Map(order.map((k, i) => [k, i + 1]));
   const leaves = [...need.keys()].filter(k => !made(k) || fromStore.get(k) > 0);
-  return { order, need, runs, tools, machines, step, leaves, canon, fromStore, extra };
+  return { order, need, runs, tools, machines, step, leaves, canon, fromStore, extra, chance };
 }
 
 // why it can't be made: the closest recipe, what it lacks, and the same for each of those
@@ -402,6 +404,7 @@ function howTo(r, key, qty) {
     return parts;
   }
   const p = plan(route, key, qty, r.have || {});
+  if (p.chance.size) parts.push(el("div", "card hint", "Some outputs have a chance of occurring. Run counts and ingredients are estimates based on average yield; you may need more runs."));
   // the target is always made, what's held of it is only said
   if (p.order.length && (r.have?.[key] ?? 0) > 0)
     parts.push(el("p", "muted", `${groupName} has ${amount(key, r.have[key])} already, this makes ${amount(key, qty)} more.`));
@@ -498,7 +501,8 @@ function howTo(r, key, qty) {
     head.append(el("span", "how", how.join(" · ")));
     const circ = uses.find(u => circuitOf(u) !== null);
     if (circ) head.append(circuitChip(circ));
-    if (times > 1) head.append(el("span", "chip", `do it ${times}×`));
+    if (times > 1) head.append(el("span", "chip", p.chance.has(k) ? `about ${times}×` : `do it ${times}×`));
+    else if (p.chance.has(k)) head.append(el("span", "chip", "chance output"));
     const m = p.extra(k).machine;
     if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
     if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
