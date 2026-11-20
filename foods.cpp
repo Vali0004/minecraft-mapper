@@ -179,6 +179,7 @@ struct Solved {
   // per key: how much of the group's holdings one of it (one mB for a fluid) uses up on its cheapest route, and
   // that route's recipe (-1 when held). per item: the cheapest over damages. INFINITY when unreachable
   vector<double> cost, cost_any;
+  vector<int> any_pick;  // concrete variant supplying each wildcard's complete cost/steps/setup tuple
   vector<int> cheapest;
   // per key: what one held unit is worth (0 for what isn't held). a held thing that can be made is worth what
   // making another would cost, so a route doesn't use up something valuable (recycle a held machine for its dust)
@@ -451,15 +452,20 @@ Solved solve(const FoodGroup &g, bool build, const set<int> &banned = {}) {
     s.steps[k] = st;
     s.setup[k] = su;
     if (name_of[k] >= 0) {
-      s.cost_any[name_of[k]] = min(s.cost_any[name_of[k]], c);
-      s.steps_any[name_of[k]] = min(s.steps_any[name_of[k]], st);
-      s.setup_any[name_of[k]] = min(s.setup_any[name_of[k]], su);
+      int n = name_of[k];
+      if (total(c, su, st, typical(k)) < total(s.cost_any[n], s.setup_any[n], s.steps_any[n], typical(k))) {
+        s.cost_any[n] = c;
+        s.steps_any[n] = st;
+        s.setup_any[n] = su;
+        s.any_pick[n] = k;
+      }
     }
     return true;
   };
   auto relax = [&]() {
     s.cost.assign(keys.size(), INFINITY);
     s.cost_any.assign(name_index.size(), INFINITY);
+    s.any_pick.assign(name_index.size(), -1);
     s.cheapest.assign(keys.size(), -1);
     s.steps.assign(keys.size(), 1 << 20);
     s.steps_any.assign(name_index.size(), 1 << 20);
@@ -470,7 +476,7 @@ Solved solve(const FoodGroup &g, bool build, const set<int> &banned = {}) {
     for (size_t n = 0; n < name_index.size(); n++)
       if (s.any[n] == 0) {
         if (s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
-        s.steps_any[n] = 0;
+        if (s.any_pick[n] < 0) s.steps_any[n] = 0;
       }
     for (int pass = 0; pass < 200; pass++) {
       bool changed = false;
@@ -619,6 +625,12 @@ struct TreeBuild {
       if (sc < INFINITY) c.emplace_back(sc, r);
     }
     sort(c.begin(), c.end());
+    // Circuit Assemblers automate the repeated hand placement of boards, wires and components. When one is
+    // runnable, use its recipe before the crafting-grid version; a failed ingredient tree still falls through
+    // to the other recipes. This also applies to circuits inside a larger machine plan.
+    stable_partition(c.begin(), c.end(), [&](const auto &x) {
+      return types[recipes[x.second].type] == "gt.recipe.circuitassembler";
+    });
     vector<int> out;
     for (auto &[cost, r] : c) out.push_back(r);
     return out;
@@ -683,6 +695,12 @@ struct TreeBuild {
       node.push_back({{"machine", keys[m]}});
     }
     put(k, node);
+    // A child may reuse an already planned node before this node exists. Adding it can close a cycle, such as
+    // Steel Plates made from ingots that are smelted from those same plates.
+    if (needs_stack(k)) {
+      back_to(mark);
+      return false;
+    }
     if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
     return true;
   }
@@ -731,9 +749,9 @@ struct TreeBuild {
       put(k, {nullptr});
       return true;
     }
-    // avoided: held but too little and no way to make more, or topped up in a plan that's trying without it.
-    // neither the held ones nor made ones (the plan's own target excepted)
-    if (scarce && scarce->count(k) && k != root) return false;
+    // An avoided item is excluded from held stock in the retry's solve. It may still need to be made when it
+    // is an ingredient of the requested item (Crop Manager needs plates even when held plates run short).
+    if (scarce && scarce->count(k) && k != root && d == 0) return false;
     if (d == 0 && force < 0 && !make) {
       put(k, {0});
       return true;
@@ -907,7 +925,9 @@ set<int> short_of(const FoodGroup *g, int k, double qty, const json &nodes, cons
     if (n == nodes.end() || n->size() != 1 || n->at(0).is_null() || n->at(0).get<int>() != 0) continue;
     int kk = key_index[key];
     bool free = key == "fluid:water" || (g && key.compare(0, 6, "fluid:") == 0 && g->free_fluids.count(key.substr(6)));
-    if (circuit_key[kk] || free || have[key] >= want) continue;
+    // Ore, crops and other gathered inputs have no recipe to plan around. The route can ask the player to
+    // gather more; excluding them would erase otherwise workable routes.
+    if (circuit_key[kk] || free || have[key] >= want || made_by[kk].empty()) continue;
     out.insert(kk);
   }
   return out;
@@ -990,7 +1010,7 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     // short: the odds and ends it reached for won't do either (4 steel plates, then 3 nuggets, then a chain
     // helmet...), a plan takes one source per ingredient. avoid every small held stock it used at once, so the
     // next round looks for a real source (iron dust into the blast furnace)
-    if (!more.empty())
+    if (!more.empty() && n2.size() <= 12)
       for (auto &[key, n] : n2.items()) {
         int kk = key_index[key];
         if (kk == k || n.size() != 1 || n[0].is_null() || n[0].get<int>() != 0 || s.free[kk] || circuit_key[kk]) continue;
@@ -1270,6 +1290,10 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     if (key.compare(0, 6, "fluid:") == 0 ||
         (key.compare(0, 23, "gregtech:gt.metaitem.01") == 0 && atoi(key.c_str() + key.rfind(':') + 1) < 32000))
       return (bool)(assembled[k] = 0);
+    // The synthesized Gallium Arsenide crystals are material forms too: macerating one into dust is a way to
+    // make more dust from gallium and arsenic, not dismantling a finished component.
+    if (key == "gregtech:gt.metaitem.03:32190" || key == "gregtech:gt.metaitem.03:32191")
+      return (bool)(assembled[k] = 0);
     // GregTech's blocks you place, pipes, cables and machines: built things, even a pipe made from one material
     // (smelting small steel fluid pipes back to ingots is scrapping them)
     if (key.compare(0, 25, "gregtech:gt.blockmachines") == 0) return (bool)(assembled[k] = 1);
@@ -1437,6 +1461,48 @@ string recipes_groups_json() {
   return json{{"groups", g}, {"players", players}}.dump();
 }
 
+// Whether another unit can be made without consuming the stock of that same item. Valuation follows the cheapest
+// path, which may loop through held stock even when a dearer independent path exists (Gallium Arsenide crystals
+// from gallium and arsenic, then dust and small piles).
+bool can_make_more(const Solved &s, int target) {
+  set<int> stack;
+  int budget = 10000;
+  function<bool(int)> make = [&](int k) {
+    if (k != target && cost_of(s, k) == 0) return true;
+    if (budget-- <= 0 || !stack.insert(k).second) return false;
+    bool ok = false;
+    if (wild[k]) {
+      for (int a : keys_of_name[name_of[k]])
+        if (a != k && make(a)) { ok = true; break; }
+    } else {
+      vector<pair<double, int>> options;
+      for (int r : made_by[k])
+        if (allowed(s, r) && machine_ok(s, recipes[r]))
+          options.emplace_back(route_score(s, recipes[r], k), r);
+      sort(options.begin(), options.end());
+      for (auto &option : options) {
+        const Recipe &rc = recipes[option.second];
+        if (!owns(s, rc)) {
+          int m = machine_to_build(s, rc);
+          if (m < 0 || !make(m)) continue;
+        }
+        bool inputs = true;
+        for (auto &slot : rc.in) {
+          if (slot.alts.empty()) continue;
+          bool one = false;
+          for (int a : slot.alts)
+            if (usable(s, slot, a) && make(a)) { one = true; break; }
+          if (!one) { inputs = false; break; }
+        }
+        if (inputs) { ok = true; break; }
+      }
+    }
+    stack.erase(k);
+    return ok;
+  };
+  return make(target);
+}
+
 string recipes_item_json(const string &key, const string &group, int force, double qty, const set<string> &banned_sigs) {
   // turned off recipes come as fingerprints: every recipe with one (identical recipes share it)
   set<int> banned;
@@ -1578,8 +1644,8 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     // gathered: nothing makes it at all (an ore, a crop, a mob drop). "build": more can be made once a machine is
     // built (an MV bending machine for the empty shape plate a mold is pressed from)
     replace[key2] = made_by[kk].empty() ? json("gathered")
-                  : s->replaceable[kk] || now->replaceable[kk] ? json(true)
-                  : build->replaceable[kk] ? json("build") : json(false);
+                  : now->replaceable[kk] || can_make_more(*now, kk) ? json(true)
+                  : build->replaceable[kk] || can_make_more(*build, kk) ? json("build") : json(false);
     string lookup = wild[kk] ? key2.substr(0, key2.rfind(':')) + ":0" : key2;
     if (auto f2 = sources.find(lookup); f2 != sources.end()) from[key2] = f2->second;
   }
