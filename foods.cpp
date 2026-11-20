@@ -576,6 +576,10 @@ struct TreeBuild {
           bool held = cost_of(s, a) == 0;
           return total(raw_of(s, a), held ? 0 : setup_of(s, a), held ? 0 : steps_of(s, a), wild[a] ? 64 : typical(a));
         };
+        // one that's held goes in before making another that would also do: they're interchangeable in this slot
+        // (the held GregTech lead casing, not a freshly cast IC2 one). too few held is topped up or planned around
+        bool hx = cost_of(s, x) == 0, hy = cost_of(s, y) == 0;
+        if (hx != hy) return hx;
         double sx = sc(x), sy = sc(y);
         if (fabs(sx - sy) > 1e-9 * max(1.0, fabs(sx))) return sx < sy;
         if (cost_of(s, x) != cost_of(s, y)) return cost_of(s, x) < cost_of(s, y);
