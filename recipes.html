@@ -406,6 +406,7 @@ function howTo(r, key, qty) {
   if (r.blockers) {
     const note = el("div", "card hint");
     note.append("This is a possible recipe path, not a complete shopping list. It stops at missing materials or machines, and its quantities may change once those paths are known.");
+    if (r.route_limits?.length) note.append(` Search stopped at ${r.route_limits.length} ${r.route_limits.length === 1 ? "item" : "items"} because the path is too deep, too large, or requires more than ${TIERS[r.route_horizon]}. Open those items to inspect their own routes.`);
     const details = el("details"), summary = el("summary", null, "Why this path is blocked"), ul = el("ul");
     ul.append(blockerTree(r.blockers));
     details.append(summary, ul);
@@ -427,8 +428,11 @@ function howTo(r, key, qty) {
   if (p.machines.size) {
     const n = el("div", "card hint");
     n.append(`This needs ${p.machines.size === 1 ? "a machine" : "machines"} you don't have yet: `);
-    [...p.machines].forEach((m, i) => { if (i) n.append(", "); n.append(itemLink(m), p.step.has(m) ? ` (step ${p.step.get(m)})` : " (you hold one, place it)"); });
-    n.append(". The plan builds it.");
+    [...p.machines].forEach((m, i) => {
+      if (i) n.append(", ");
+      n.append(itemLink(m), p.step.has(m) ? ` (step ${p.step.get(m)})` : route.nodes[m]?.[0] === 0 ? " (you hold one, place it)" : " (source unknown)");
+    });
+    n.append(". Their ingredients are included in the steps below where recipes are known.");
     parts.push(n);
   }
   // what you need to start
@@ -449,6 +453,8 @@ function howTo(r, key, qty) {
       if (have !== undefined) ct.append(" · ", el("span", have >= want ? "ok" : "short", have >= want ? `have ${amount(k, have)}` : `have ${amount(k, have)}, short ${amount(k, want - have)}`));
     }
     t.append(ct);
+    const tierLimited = route.nodes[k]?.[1]?.tier_limited;
+    if (tierLimited != null) t.append(el("div", "ct short", `Making more needs ${TIERS[tierLimited]}, beyond this plan's ${TIERS[r.route_horizon]} limit.`));
     // where it comes from: can the team make more, and the loot bags and quests that give it
     const src = (r.sources || {})[k] || [];
     if (r.replaceable && k in r.replaceable) {
@@ -507,6 +513,8 @@ function howTo(r, key, qty) {
     head.append(el("span", "num", i + 1), el("span", "what", `${isMachine ? "Build" : "Make"} ${amount(k, making)} ${name(k)}`));
     const how = [machine(rc)];
     if (power(rc)) how.push(power(rc));
+    if (route.provisional && rc.eut > 0 && rc.ticks > 0)
+      how.push(`${(rc.eut * rc.ticks * times).toLocaleString()} EU for ${times} ${times === 1 ? "run" : "runs"}`);
     head.append(el("span", "how", how.join(" · ")));
     const circ = uses.find(u => circuitOf(u) !== null);
     if (circ) head.append(circuitChip(circ));
@@ -514,7 +522,13 @@ function howTo(r, key, qty) {
     else if (p.chance.has(k)) head.append(el("span", "chip", "chance output"));
     const m = p.extra(k).machine;
     if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
-    if (p.extra(k).missing_machine) head.append(el("span", "chip build", `needs ${p.extra(k).missing_machine}`));
+    if (p.extra(k).missing_machine) {
+      const x = p.extra(k), tier = x.missing_tier >= 0 ? ` at ${TIERS[x.missing_tier]}` : "";
+      const have = x.have_tier >= 0 ? `, best available ${TIERS[x.have_tier]}` : ", none available";
+      const chip = el("span", "chip build", `needs ${x.missing_machine}${tier}${have}`);
+      if (x.missing_machine_key && !x.machine) chip.append(" · ", itemLink(x.missing_machine_key));
+      head.append(chip);
+    }
     if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
     if (p.extra(k).auto) head.append(el("span", "chip pick", "your crafting module makes this"));
     li.append(head);

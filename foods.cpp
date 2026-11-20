@@ -580,7 +580,8 @@ json recipe_json(int r, set<int> &named) {
     o.push_back({keys[x.key], x.amount, x.chance});
     named.insert(x.key);
   }
-  json j = {{"t", types[rc.type]}, {"eut", rc.eut}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
+  json j = {{"t", types[rc.type]}, {"eut", rc.eut}, {"ticks", rc.ticks},
+            {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
   if (rc.w > 0) j["w"] = rc.w, j["h"] = rc.h;
   if (auto m = machine_names.find(types[rc.type]); m != machine_names.end()) j["machine"] = m->second;
   // only what plans won't use (a breakdown machine scrapping something assembled), not every recipe the loose
@@ -1167,9 +1168,26 @@ struct MissingPlan {
   set<int> &named;
   Missing missing;
   set<int> stack, seen;
+  set<int> limited;
   vector<int> added;
-  int budget = 100;
+  int budget = 800;
+  int horizon = 5;
 
+  bool raw_material(int k) const {
+    const string &key = keys[k];
+    if (key.starts_with("fluid:")) return true;
+    if (!key.starts_with("gregtech:gt.metaitem.01:")) return false;
+    int meta = atoi(key.c_str() + key.rfind(':') + 1);
+    return meta < 3000 || (meta >= 9000 && meta < 13000);
+  }
+  bool processed_form(int k) const {
+    const string &key = keys[k];
+    if (key.starts_with("gregtech:gt.metaitem.01:")) {
+      int meta = atoi(key.c_str() + key.rfind(':') + 1);
+      return meta >= 13000 && meta < 32000;
+    }
+    return key.starts_with("gregtech:gt.metaitem.02:") || key.starts_with("gregtech:gt.block");
+  }
   // For an unavailable material, start from dusts and ingots before plates, tool parts or placed blocks.
   // This keeps a provisional path pointed toward primary production rather than melting a finished part.
   int source_rank(int k) const {
@@ -1187,6 +1205,9 @@ struct MissingPlan {
   }
   int recipe_rank(int r) const {
     const string &type = types[recipes[r].type];
+    bool cools_plasma = type == "gt.recipe.vacuumfreezer" && any_of(recipes[r].in.begin(), recipes[r].in.end(), [](const Slot &slot) {
+      return any_of(slot.alts.begin(), slot.alts.end(), [](int k) { return keys[k].starts_with("fluid:plasma."); });
+    });
     int rank = type == "gt.recipe.polarizer" || type == "gt.recipe.vacuumfreezer" ? -10
              : type == "gt.recipe.blastfurnace" ? -8
              : type == "gt.recipe.mixer" ? -6
@@ -1194,12 +1215,15 @@ struct MissingPlan {
              : type == "gt.recipe.extruder" ? -3
              : type == "gt.recipe.arcfurnace" || type == "gt.recipe.fluidcanner" ? 8
              : type == "gt.recipe.fluidsolidifier" || type == "gt.recipe.fluidextractor" || type == "smelting" ? 5 : 0;
+    if (cools_plasma) rank += 50;
     for (auto &slot : recipes[r].in) {
       if (slot.count <= 0 || slot.alts.empty()) continue;
       int best = 10;
       for (int a : slot.alts) best = min(best, source_rank(a));
       rank += best;
     }
+    if (recipes[r].eut > 0 && !owns(s, recipes[r]) && tier_for(recipes[r].eut) >= 6)
+      rank += 40 * (tier_for(recipes[r].eut) - 5);
     return rank;
   }
 
@@ -1233,6 +1257,10 @@ struct MissingPlan {
         int child = key_index[u.get<string>()];
         if (stack.count(child) || walk(child)) return true;
       }
+      if (n->size() >= 4 && (*n)[3].contains("machine")) {
+        int machine = key_index[(*n)[3]["machine"].get<string>()];
+        if (stack.count(machine) || walk(machine)) return true;
+      }
       return false;
     };
     return walk(k);
@@ -1240,13 +1268,12 @@ struct MissingPlan {
   bool add(int k, int depth = 0) {
     if (stack.count(k)) return false;
     if (seen.count(k)) return !needs_stack(k);
-    // High-tier circuit placeholders fan out into thousands of speculative parts. Leave one as a clearly
-    // missing ingredient. Its own page can explain its routes without swamping this machine's plan.
-    if (cost_of(s, k) != 0 && keys[k].starts_with("dreamcraft:item.Circuit")) {
+    if ((int)nodes.size() >= budget || depth >= 64) {
+      limited.insert(k);
       put(k, {nullptr});
       return true;
     }
-    if (--budget < 0 || depth >= 12 || (made_by[k].empty() && !wild[k])) {
+    if (made_by[k].empty() && !wild[k]) {
       put(k, {nullptr});
       return true;
     }
@@ -1267,7 +1294,29 @@ struct MissingPlan {
         }
     } else {
       vector<int> choices;
-      for (int r : made_by[k]) if (allowed(s, r)) choices.push_back(r);
+      bool cycle_failed = false;
+      int beyond = 15;
+      for (int r : made_by[k]) if (allowed(s, r)) {
+        bool scraps_form = false;
+        if (raw_material(k))
+          for (auto &slot : recipes[r].in) {
+            if (slot.count <= 0 || slot.alts.empty()) continue;
+            bool can_use_raw = false;
+            for (int a : slot.alts)
+              if (cost_of(s, a) == 0 || !processed_form(a)) can_use_raw = true;
+            if (!can_use_raw) scraps_form = true;
+          }
+        if (scraps_form) continue;
+        bool consumes_plasma = false;
+        for (auto &slot : recipes[r].in)
+          for (int a : slot.alts)
+            if ((keys[a].starts_with("fluid:plasma.") || display(a).find("Plasma Cell") != string::npos) && cost_of(s, a) != 0)
+              consumes_plasma = true;
+        if (consumes_plasma && (types[recipes[r].type] == "gt.recipe.fluidcanner" || !keys[k].starts_with("fluid:plasma."))) continue;
+        int tier = recipes[r].eut > 0 ? tier_for(recipes[r].eut) : 0;
+        if (depth > 0 && tier > horizon) { beyond = min(beyond, tier); continue; }
+        choices.push_back(r);
+      }
       stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
         return recipe_rank(a) < recipe_rank(b);
       });
@@ -1292,11 +1341,25 @@ struct MissingPlan {
           bool found = false;
           for (int a : alts)
             if (usable(s, slot, a) && add(a, depth + 1)) { uses.push_back(keys[a]); found = true; break; }
-          if (!found) { ok = false; break; }
+          if (!found) {
+            for (int a : alts) if (stack.count(a)) cycle_failed = true;
+            ok = false;
+            break;
+          }
         }
         if (ok && !owns(s, recipes[r])) {
           auto name = machine_names.find(types[recipes[r].type]);
           extra["missing_machine"] = name != machine_names.end() ? name->second : types[recipes[r].type];
+          extra["missing_tier"] = recipes[r].eut > 0 ? tier_for(recipes[r].eut) : -1;
+          extra["have_tier"] = s.tier[recipes[r].type];
+          int machine = machine_to_build(s, recipes[r]);
+          if (machine >= 0 && add(machine, depth + 1)) extra["machine"] = keys[machine];
+          else {
+            int need = max(0, extra["missing_tier"].get<int>()), pick = -1, pick_tier = INT_MAX;
+            for (auto &m : machine_items[recipes[r].type])
+              if (m.tier >= need && m.tier < pick_tier) pick = m.key, pick_tier = m.tier;
+            if (pick >= 0) extra["missing_machine_key"] = keys[pick], named.insert(pick);
+          }
         }
         if (ok) {
           json n = {1, r, uses};
@@ -1307,6 +1370,16 @@ struct MissingPlan {
           return true;
         }
         back_to(mark);
+      }
+      if (cycle_failed) {
+        stack.erase(k);
+        return false;
+      }
+      if (choices.empty() && beyond < 15) {
+        limited.insert(k);
+        stack.erase(k);
+        put(k, {nullptr, {{"tier_limited", beyond}}});
+        return true;
       }
     }
     stack.erase(k);
@@ -1479,6 +1552,15 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     if (key.compare(0, 6, "fluid:") == 0 ||
         (key.compare(0, 23, "gregtech:gt.metaitem.01") == 0 && atoi(key.c_str() + key.rfind(':') + 1) < 32000))
       return (bool)(assembled[k] = 0);
+    // GregTech's springs, small springs and superdense plates are made components. Recovering their metal is scrapping.
+    if (key.starts_with("gregtech:gt.metaitem.02:")) {
+      int meta = atoi(key.c_str() + key.rfind(':') + 1);
+      if (meta >= 23000 && meta < 25000) return (bool)(assembled[k] = 1);
+    }
+    if (key.starts_with("gregtech:gt.metaitem.03:")) {
+      int meta = atoi(key.c_str() + key.rfind(':') + 1);
+      if (meta >= 6000 && meta < 7000) return (bool)(assembled[k] = 1);
+    }
     // The synthesized Gallium Arsenide crystals are material forms too: macerating one into dust is a way to
     // make more dust from gallium and arsenic, not dismantling a finished component.
     if (key == "gregtech:gt.metaitem.03:32190" || key == "gregtech:gt.metaitem.03:32191")
@@ -1805,7 +1887,29 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   if (s->dist[k] >= INF) {
     nodes = json::object(), jr = json::object();
     MissingPlan path{*s, nodes, jr, named, Missing{*s}};
+    int best_tier = 0;
+    for (size_t t = 0; t < types.size(); t++)
+      if (!type_free[t] && types[t].starts_with("gt.recipe.") && s->tier[t] >= 0 && s->tier[t] < 9)
+        best_tier = max(best_tier, s->tier[t]);
+    int target_tier = 0;
+    const vector<string> tiers = {"ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV"};
+    auto tier_hint = [&](int item) {
+      const string name = display(item);
+      for (int tier = 8; tier >= 1; tier--)
+        if (name.find("(" + tiers[tier] + ")") != string::npos || name.starts_with(tiers[tier] + " ") ||
+            name.find(" " + tiers[tier] + " ") != string::npos) return tier;
+      return 0;
+    };
+    target_tier = tier_hint(k);
+    for (int r : made_by[k])
+      if (allowed(*s, r))
+        for (auto &slot : recipes[r].in)
+          for (int a : slot.alts) target_tier = max(target_tier, tier_hint(a));
+    path.horizon = min(8, max(best_tier + 1, target_tier));
     path.add(k);
+    out["route_limits"] = json::array();
+    for (int item : path.limited) if (nodes.contains(keys[item])) out["route_limits"].push_back(keys[item]);
+    out["route_horizon"] = path.horizon;
   }
   out["qty"] = qty;
   // steps the team's crafting modules do by themselves
