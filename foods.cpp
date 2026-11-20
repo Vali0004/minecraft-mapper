@@ -663,8 +663,13 @@ struct TreeBuild {
       for (auto &u : kids) {
         if (u.is_null()) continue;
         int c = key_index[u.get<string>()];
-        // held stock of what's being made, inside a machine the plan builds, is allowed (see add)
-        if (stack.count(c) && !(building > 0 && cost_of(s, c) == 0 && !wild[c])) return true;
+        // something being made higher up, made again down here: a loop. used from what's held there (a leaf), it
+        // isn't one; nor is held stock of it going into a machine the plan builds (see add)
+        if (stack.count(c)) {
+          auto cn = nodes.find(keys[c]);
+          bool made_here = cn != nodes.end() && cn->size() >= 3;
+          if (made_here && !(building > 0 && cost_of(s, c) == 0 && !wild[c])) return true;
+        }
         if (walk(c)) return true;
       }
       return false;
@@ -674,7 +679,9 @@ struct TreeBuild {
   bool add(int k, int force = -1, bool make = false) {
     // already planned: reuse it, unless it needs what's being made higher up (that would be a loop: more
     // annealed copper ingots from macerating the wire the plan makes out of annealed copper ingots)
-    if (seen.count(k)) return !needs_stack(k);
+    // (the fewest steps fallback can't loop, every step there is closer to what's held: no check, so it always
+    // finds the plan there is)
+    if (seen.count(k)) return !thrifty || !needs_stack(k);
     // something being made higher up: a loop. except when it's held and goes into a machine the plan builds (the
     // held vacuum tubes in the circuits of the extractor that makes what more vacuum tubes need). never into
     // making more of itself (annealed copper ingots to a block to dust to annealed copper ingots)
@@ -891,16 +898,29 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
   set<int> scarce;
   bool have_plan = false;
   double have_total = INFINITY;
+  // planning around something: price everything again as if it weren't held, so the plan's own top recipe is
+  // chosen afresh too (13 rubber pulp with only 4 rubber bars: not crafting small piles, whose cheap source was
+  // the bars, from rubber sheets cut into casings and macerated, when the sheets macerate straight to pulp)
+  shared_ptr<Solved> without;
   auto attempt = [&](const set<int> &avoid, json &n2, json &r2, set<int> &named2) {
+    const Solved *use = &s;
+    if (!avoid.empty() && g) {
+      FoodGroup g2 = *g;
+      for (int a : avoid) g2.held.erase(keys[a]);
+      without = make_shared<Solved>(solve(g2, s.build));
+      use = without.get();
+    }
     set<int> seen2;
-    TreeBuild b{s, n2, r2, named2, seen2};
+    TreeBuild b{*use, n2, r2, named2, seen2};
     b.scarce = &avoid;
     b.root = k;
     b.root_qty = qty;
     // the target is made even when some is held: looking it up is wanting more of it. something nothing makes
     // stays held (or unreachable)
     if (!b.add(k, force, !made_by[k].empty())) return false;
-    fill_shortfalls(s, g, k, qty, n2, r2, named2, seen2, &avoid);
+    // planning around something can leave no way at all: that's no plan, not a plan that uses nothing up
+    if (auto root = n2.find(keys[k]); root == n2.end() || root->at(0).is_null()) return false;
+    fill_shortfalls(*use, g, k, qty, n2, r2, named2, seen2, &avoid);
     return true;
   };
   for (int round = 0; round < 4; round++) {
@@ -997,6 +1017,15 @@ json blockers(const Solved &s, int k, int depth, set<int> &stack) {
     auto mn = machine_names.find(types[rc.type]);
     out["machine"] = {{"name", mn != machine_names.end() ? mn->second : types[rc.type]}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1},
                       {"have", s.tier[rc.type]}};
+    // and why that machine can't be built: the lowest tier one that would do, explained the same way
+    int need = rc.eut > 0 ? tier_for(rc.eut) : 0, pick = -1, pick_tier = INT_MAX;
+    for (auto &m : machine_items[rc.type])
+      if (m.tier >= need && m.tier < pick_tier) pick = m.key, pick_tier = m.tier;
+    if (pick >= 0 && depth > 0 && !stack.count(pick)) {
+      stack.insert(k);
+      out["machine"]["why"] = blockers(s, pick, depth - 1, stack);
+      stack.erase(k);
+    }
   }
   json missing = json::array();
   stack.insert(k);
@@ -1154,38 +1183,44 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       }
     }
   }
-  // assembled: every way to make it puts together two or more different things. an ingot (molten metal and a
-  // mold that's kept), a rod, a wire, a dust, a rubber sheet (cast from molten rubber) are one material in another
-  // form. counting the recipes that look like taking things apart too: the solidifier casting a sheet from molten
-  // rubber is exactly what says a sheet is just rubber
+  // assembled: something put together from different things (a motor, a conveyor module, a machine), not one
+  // material in another form. GregTech's material items (ingots, plates, rods, wires, dusts, a rubber sheet:
+  // gt.metaitem.01 below 32000) are always forms; anything else is assembled if any recipe making it (that isn't
+  // breaking something down) combines two or more different things. any, not every: somewhere in the pack a one
+  // ingredient recipe gives LV motors, that doesn't make a motor raw material
   vector<signed char> assembled(keys.size(), -1);
   auto is_assembled = [&](int k) {
     if (assembled[k] >= 0) return (bool)assembled[k];
-    bool any = false, all = true;
+    const string &key = keys[k];
+    // fluids are materials (a gas made from air isn't put together), so are GregTech's material items
+    if (key.compare(0, 6, "fluid:") == 0 ||
+        (key.compare(0, 23, "gregtech:gt.metaitem.01") == 0 && atoi(key.c_str() + key.rfind(':') + 1) < 32000))
+      return (bool)(assembled[k] = 0);
+    bool any = false;
     for (int r : made_by[k]) {
+      // every way counts, even ones the loose recycling check flags (a cable is made from wire and rubber, cables
+      // can be stripped back to wire so that looks like recycling: it still says a cable is put together)
       set<int> used;
       for (auto &slot : recipes[r].in)
         if (slot.count > 0 && !slot.alts.empty()) used.insert(slot.alts[0]);
-      any = true;
-      all &= used.size() >= 2;
+      any |= used.size() >= 2;
     }
-    return (bool)(assembled[k] = any && all);
+    return (bool)(assembled[k] = any);
   };
-  // machines that break things down: one taking in something assembled is scrapping it, whether or not its outputs
-  // are what it was made from (a conveyor module macerates to rubber pulp and dusts, it was made from plates,
-  // cables and a motor)
-  static const set<string> breakdown = {"gt.recipe.macerator", "gt.recipe.arcfurnace", "gt.recipe.plasmaarcfurnace",
-                                        "gt.recipe.fluidextractor", "gt.recipe.extractor", "ic.recipe.recycler"};
+  // scrapping: taking in something assembled and giving back only material forms and fluids, in whatever machine
+  // (macerating a conveyor module to rubber pulp and dusts, smelting or alloy smelting a motor back to a rubber bar).
+  // building puts out something assembled, an assembler putting logistics pipes and a circuit into a chassis is
+  // fine. emptying a cell in the fluid canner is fine too
   plannable.assign(recipes.size(), true);
   for (int r = 0; r < (int)recipes.size(); r++) {
-    const string &type = types[recipes[r].type];
-    // only a machine that breaks things down scraps them: an assembler putting logistics pipes and a circuit into
-    // a chassis is building, whatever the recycling check thinks
-    if (!breakdown.count(type)) continue;
-    bool scraps = false;
+    if (types[recipes[r].type] == "gt.recipe.fluidcanner") continue;
+    bool takes = false, gives = false;
     for (auto &slot : recipes[r].in)
-      if (slot.count > 0 && !slot.alts.empty()) scraps |= is_assembled(slot.alts[0]);
-    plannable[r] = !scraps;
+      if (slot.count > 0 && !slot.alts.empty()) takes |= is_assembled(slot.alts[0]);
+    if (!takes) continue;
+    for (auto &o : recipes[r].out)
+      if (keys[o.key].compare(0, 6, "fluid:") != 0) gives |= is_assembled(o.key);
+    plannable[r] = gives;
   }
   circuit_key.assign(keys.size(), false);
   if (auto c = name_index.find("gregtech:gt.integrated_circuit"); c != name_index.end())
@@ -1406,6 +1441,7 @@ string recipes_item_json(const string &key, const string &group, int force, doub
       if (x.contains("recipe") && !jr.contains(to_string(x["recipe"].get<int>()))) jr[to_string(x["recipe"].get<int>())] = recipe_json(x["recipe"].get<int>(), named);
       if (x.contains("missing"))
         for (auto &m : x["missing"]) walk(m);
+      if (x.contains("machine") && x["machine"].contains("why")) walk(x["machine"]["why"]);
     };
     walk(b);
     out["route"]["recipes"] = jr;

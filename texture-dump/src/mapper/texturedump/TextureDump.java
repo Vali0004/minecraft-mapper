@@ -792,6 +792,56 @@ public class TextureDump {
     } catch (Throwable t) {
       System.out.println("[texturedump] no GregTech recipe maps");
     }
+    // GregTech's assembly line: its real recipes are kept apart (the recipe map only has copies for showing, marked
+    // fake). made in the assembly line's own recipe map, so a team with one can run them. the research a recipe
+    // needs first (a data stick) isn't planned
+    int al = 0;
+    try {
+      Class<?> alc = Class.forName("gregtech.api.util.GTRecipe$RecipeAssemblyLine");
+      for (Object g : (List<?>) alc.getField("sAssemblylineRecipes").get(null)) {
+        try {
+          Recipe r = new Recipe();
+          r.type = "gt.recipe.fakeAssemblylineProcess";
+          r.eut = alc.getField("mEUt").getInt(g);
+          r.ticks = alc.getField("mDuration").getInt(g);
+          Object[] ins = (Object[]) alc.getField("mInputs").get(g);
+          Object[][] alts = (Object[][]) alc.getField("mOreDictAlt").get(g);
+          boolean ok = true;
+          for (int i = 0; ins != null && i < ins.length && ok; i++) {
+            List<String> slot = new ArrayList<>();
+            int count = 0;
+            Object[] options = alts != null && i < alts.length && alts[i] != null && alts[i].length > 0 ? alts[i] : new Object[] { ins[i] };
+            for (Object st : options) {
+              if (st == null) continue;
+              String k = key(st, nameOf, itemRegistry);
+              if (k == null) continue;
+              for (String c : circuitAlternatives(st, k, nameOf, itemRegistry)) if (!slot.contains(c)) slot.add(c);
+              if (count == 0) count = (Integer) get(st, "field_77994_a", "stackSize");
+            }
+            if (slot.isEmpty()) { ok = false; break; }
+            r.in.add(slot);
+            r.inMeta.add(new int[] { count });
+          }
+          Object[] fin = (Object[]) alc.getField("mFluidInputs").get(g);
+          for (int i = 0; fin != null && i < fin.length; i++) {
+            if (fin[i] == null) continue;
+            Object f = fin[i].getClass().getMethod("getFluid").invoke(fin[i]);
+            r.in.add(java.util.Collections.singletonList("fluid:" + f.getClass().getMethod("getName").invoke(f)));
+            r.inMeta.add(new int[] { fin[i].getClass().getField("amount").getInt(fin[i]) });
+          }
+          Object out = alc.getField("mOutput").get(g);
+          String ok2 = out == null ? null : key(out, nameOf, itemRegistry);
+          if (!ok || ok2 == null || r.in.isEmpty()) continue;
+          r.out.add(ok2);
+          r.outMeta.add(new int[] { (Integer) get(out, "field_77994_a", "stackSize"), 10000 });
+          all.add(r);
+          al++;
+        } catch (Throwable t) { skipped++; }
+      }
+      System.out.println("[texturedump] read " + al + " assembly line recipes");
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no assembly line recipes: " + t);
+    }
     // Tinkers' Construct: the smeltery melting items, alloying fluids, the casting table and basin. types
     // "tconstruct.melting", "tconstruct.alloy", "tconstruct.table", "tconstruct.basin"
     int tcon = 0;

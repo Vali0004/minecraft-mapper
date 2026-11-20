@@ -314,7 +314,7 @@ async function search() {
     const b = el("button");
     b.dataset.key = x.key;
     b.setAttribute("aria-current", x.key === current);
-    b.append(icon(x.key, "sm"), el("span", "n", x.name), el("span", "c", x.makes ? `${x.makes} recipe${x.makes > 1 ? "s" : ""}` : "gathered"));
+    b.append(icon(x.key, "sm"), el("span", "n", x.name), el("span", "c", x.makes ? `${x.makes} recipe${x.makes > 1 ? "s" : ""}` : "no recipe known"));
     b.addEventListener("click", () => open(x.key));
     return b;
   }), ...(r.total > r.results.length ? [el("p", "empty", `${r.total - r.results.length} more, narrow the search`)] : []));
@@ -365,18 +365,20 @@ function blockerTree(b, depth = 0) {
   const li = el("li"), line = el("span");
   line.append(itemLink(b.key));
   const rc = b.recipe != null ? lastRoute.recipes[b.recipe] : null;
-  if (b.gathered) line.append(" ", el("span", "short", "none held, and nothing makes it: gather it"));
+  if (b.gathered) line.append(" ", el("span", "short", "none held, and no recipe known: it's mined, farmed or dropped, or made somewhere the planner doesn't read"));
   else if (rc) line.append(" ", el("span", "via", `via ${machine(rc)}${rc.tier >= 0 ? ", " + TIERS[rc.tier] : ""}`));
   if (b.machine) {
     const m = b.machine;
     line.append(" ", el("span", "short", `needs a ${m.name}${m.tier >= 0 ? " that runs " + TIERS[m.tier] : ""}` +
-      (m.have >= 0 ? `, yours runs ${TIERS[m.have]}` : ", you have none") + ", and one can't be built from what you have"));
+      (m.have >= 0 ? `, yours runs ${TIERS[m.have]}` : ", you have none") + (m.why ? ", and building one needs:" : ", and one can't be built from what you have")));
   }
   if (b.more) line.append(" ", el("span", "muted", "(and more)"));
   li.append(line);
-  if (b.missing?.length) {
+  // what's missing: the ingredients, and what stops building the machine it needs
+  const kids = [...(b.missing || []), ...(b.machine?.why ? [b.machine.why] : [])];
+  if (kids.length) {
     const ul = el("ul");
-    for (const m of b.missing) ul.append(blockerTree(m, depth + 1));
+    for (const m of kids) ul.append(blockerTree(m, depth + 1));
     li.append(ul);
   }
   return li;
@@ -588,7 +590,7 @@ function render(r, key, qty) {
   tt.append(el("h2", null, name(key)), el("div", "key", key));
   title.append(icon(key, "lg"), tt);
   parts.push(title);
-  parts.push(el("div", "muted", `${r.producers_total ? r.producers_total + " recipe" + (r.producers_total > 1 ? "s" : "") + " make it" : "No recipe makes it, it's gathered"} · used in ${r.uses}`));
+  parts.push(el("div", "muted", `${r.producers_total ? r.producers_total + " recipe" + (r.producers_total > 1 ? "s" : "") + " make it" : "No recipe known for it (mined, farmed, a drop, or made somewhere the planner doesn't read)"} · used in ${r.uses}`));
 
   const hh = el("h3", null, "How to make it"); hh.id = "howto";
   parts.push(hh);
