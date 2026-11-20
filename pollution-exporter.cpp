@@ -1403,6 +1403,10 @@ void collect_containers(const path savepath, string &out) {
       for (auto &[tk, m] : fluids)
         for (auto &[fk, mb] : m)
           if (mb > 0 && fk.second.find("Pipe") == string::npos) fs.groups[tk.first].held["fluid:" + fk.first] += mb;
+      // a Tinkers' Construct smeltery: its melting, alloying and casting (a casting table is trivial to make)
+      for (auto &[tk, ts] : tiles)
+        for (auto &[type, n] : ts)
+          if (n > 0 && type == "TConstruct.Smeltery") fs.groups[tk.first].stations.insert("tconstruct");
       // a boiler (Railcraft's or GregTech's) makes steam, no recipe says so
       for (auto &[team, dim, b] : boilers) fs.groups[team].free_fluids.insert("steam");
       for (auto &[team, dim, b] : gt) fs.groups[team].free_fluids.insert("steam");

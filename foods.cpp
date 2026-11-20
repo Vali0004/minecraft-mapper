@@ -179,6 +179,7 @@ struct Solved {
   vector<double> value;
   // per key: held, and the group can make more of it (a recipe that doesn't take something apart)
   vector<bool> replaceable;
+  vector<int> value_by;  // per held key: the recipe its worth came from (making another), -1 for none
   // per key: how many recipe steps its thriftiest route takes (0 when held), per item the fewest over damages
   vector<int> steps, steps_any;
   // per key: what its thriftiest route costs once, however much is made (machines to build, tools to make)
@@ -358,6 +359,9 @@ Solved solve(const FoodGroup &g, bool build) {
   tier.assign(types.size(), -1);
   for (size_t t = 0; t < types.size(); t++)
     if (type_free[t]) tier[t] = 15;
+  // other mods' stations: a smeltery runs all of Tinkers' Construct's recipes
+  for (size_t t = 0; t < types.size(); t++)
+    if (types[t].compare(0, 11, "tconstruct.") == 0 && g.stations.count("tconstruct")) tier[t] = 15;
   for (int mid : g.machines) {
     auto m = machine_maps.find(mid);
     if (m == machine_maps.end()) continue;
@@ -464,6 +468,9 @@ Solved solve(const FoodGroup &g, bool build) {
     if (a == k) return true;
     if (depth <= 0 || wild[a]) return false;
     int r = s.cheapest[a];
+    // something held: follow how another would be made (the gold wire held is made from gold ingots, which are
+    // made from the gold dust being valued: a loop through held stock is still a loop)
+    if (r < 0 && s.dist[a] == 0 && !s.value_by.empty()) r = s.value_by[a];
     if (r < 0) return false;
     for (auto &slot : recipes[r].in) {
       if (slot.count == 0 || slot.alts.empty()) continue;
@@ -478,7 +485,9 @@ Solved solve(const FoodGroup &g, bool build) {
   // again until it settles: each round values held things from what the others are worth after the last one, so
   // the crushed ore's worth reaches the impure dust made from it, and the dust made from that
   vector<double> before;
+  s.value_by.assign(keys.size(), -1);
   for (int round = 0; round < 4 && before != s.value; round++) {
+  vector<int> by(keys.size(), -1);
   before = s.value;
   vector<double> value = s.value;
   s.replaceable.assign(keys.size(), false);
@@ -499,12 +508,13 @@ Solved solve(const FoodGroup &g, bool build) {
       }
       if (loops) continue;
       double per = made_per_run(rc, k), c = run_cost(s, rc);
-      if (per > 0 && c < INFINITY) best = min(best, c / per);
+      if (per > 0 && c < INFINITY && c / per < best) best = c / per, by[k] = r;
     }
     value[k] = best == INFINITY ? PRECIOUS * base(k) : best;
     s.replaceable[k] = best < INFINITY;
   }
   s.value = value;
+  s.value_by = by;
   relax();
   }
   return s;
@@ -1067,6 +1077,11 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       json fl = json::parse(readFile(dir / "fluids.json"));
       for (auto &[k, v] : fl.items()) fluid_names[k] = v.get<string>();
     }
+    // Tinkers' Construct's stations, by their names in game
+    machine_names["tconstruct.table"] = "Casting Table";
+    machine_names["tconstruct.basin"] = "Casting Basin";
+    machine_names["tconstruct.melting"] = "Smeltery";
+    machine_names["tconstruct.alloy"] = "Smeltery (alloying)";
     if (exists(dir / "recipe_maps.json")) {
       json rm = json::parse(readFile(dir / "recipe_maps.json"));
       for (auto &[k, v] : rm.items()) machine_names[k] = v.get<string>();

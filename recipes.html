@@ -542,7 +542,9 @@ function altCard(p, key, best) {
   if (p.cost != null && best) {
     const x = p.cost / best;
     // scoring better than the plan's pick: it was passed over, something along it would run short
-    if (x < 0.995 && forced == null) h.append(el("span", "chip", "cheaper, but you'd run short of something on the way"));
+    // scoring better than the plan's pick: it was passed over, because it needs a machine built (the plan uses what
+    // the team has when it can) or because something along it would run short
+    if (x < 0.995 && forced == null) h.append(el("span", "chip", p.build || p.needs_build ? "cheaper, once you build the machine" : "cheaper, but you'd run short of something on the way"));
     else h.append(el("span", "chip" + (x < 1.005 ? " pick" : ""), x < 1.005 ? (forced === p.id ? "your pick" : "the plan's pick") : `route costs ${fmt(x)}× as much`));
   }
   if (p.cost != null) {

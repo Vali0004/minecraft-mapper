@@ -792,6 +792,81 @@ public class TextureDump {
     } catch (Throwable t) {
       System.out.println("[texturedump] no GregTech recipe maps");
     }
+    // Tinkers' Construct: the smeltery melting items, alloying fluids, the casting table and basin. types
+    // "tconstruct.melting", "tconstruct.alloy", "tconstruct.table", "tconstruct.basin"
+    int tcon = 0;
+    try {
+      Class<?> registry = Class.forName("tconstruct.library.TConstructRegistry");
+      Class<?> smeltery = Class.forName("tconstruct.library.crafting.Smeltery");
+      for (String kind : new String[] { "table", "basin" }) {
+        Object casting = registry.getMethod(kind.equals("table") ? "getTableCasting" : "getBasinCasting").invoke(null);
+        List<?> list = null;
+        try { list = (List<?>) casting.getClass().getMethod("getCastingRecipes").invoke(casting); } catch (Throwable t) {}
+        if (list == null) list = (List<?>) field(casting.getClass(), "casts", "casts").get(casting);
+        for (Object cr : list) {
+          try {
+            Class<?> cc = cr.getClass();
+            Object out = cc.getField("output").get(cr), metal = cc.getField("castingMetal").get(cr), cast = cc.getField("cast").get(cr);
+            if (out == null || metal == null) continue;
+            Recipe r = new Recipe();
+            r.type = "tconstruct." + kind;
+            if (cast != null) {
+              String ck = key(cast, nameOf, itemRegistry);
+              if (ck == null) continue;
+              r.in.add(java.util.Collections.singletonList(ck));
+              r.inMeta.add(new int[] { cc.getField("consumeCast").getBoolean(cr) ? 1 : 0 });
+            }
+            Object f = metal.getClass().getMethod("getFluid").invoke(metal);
+            r.in.add(java.util.Collections.singletonList("fluid:" + f.getClass().getMethod("getName").invoke(f)));
+            r.inMeta.add(new int[] { metal.getClass().getField("amount").getInt(metal) });
+            r.out.add(key(out, nameOf, itemRegistry));
+            r.outMeta.add(new int[] { (Integer) get(out, "field_77994_a", "stackSize"), 10000 });
+            if (r.out.get(0) != null) { all.add(r); tcon++; }
+          } catch (Throwable t) { skipped++; }
+        }
+      }
+      Map<?, ?> melting = (Map<?, ?>) smeltery.getMethod("getSmeltingList").invoke(null);
+      Class<?> stackClass = Class.forName("net.minecraft.item.ItemStack");
+      for (Map.Entry<?, ?> e : melting.entrySet()) {
+        try {
+          Object w = e.getKey(), fluid = e.getValue();
+          Object item = w.getClass().getField("item").get(w);
+          // Mantle's wrapper keeps meta boxed (Integer), getInt doesn't unbox
+          Object metaObj = w.getClass().getField("meta").get(w);
+          int meta = metaObj == null ? 0 : ((Number) metaObj).intValue();
+          Object st = stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class).newInstance(item, 1, meta < 0 ? 32767 : meta);
+          Recipe r = new Recipe();
+          r.type = "tconstruct.melting";
+          r.in.add(java.util.Collections.singletonList(key(st, nameOf, itemRegistry)));
+          r.inMeta.add(new int[] { 1 });
+          Object f = fluid.getClass().getMethod("getFluid").invoke(fluid);
+          r.out.add("fluid:" + f.getClass().getMethod("getName").invoke(f));
+          r.outMeta.add(new int[] { fluid.getClass().getField("amount").getInt(fluid), 10000 });
+          all.add(r);
+          tcon++;
+        } catch (Throwable t) { skipped++; }
+      }
+      for (Object mix : (List<?>) smeltery.getMethod("getAlloyList").invoke(null)) {
+        try {
+          Object res = mix.getClass().getField("result").get(mix);
+          Recipe r = new Recipe();
+          r.type = "tconstruct.alloy";
+          for (Object m : (List<?>) mix.getClass().getField("mixers").get(mix)) {
+            Object f = m.getClass().getMethod("getFluid").invoke(m);
+            r.in.add(java.util.Collections.singletonList("fluid:" + f.getClass().getMethod("getName").invoke(f)));
+            r.inMeta.add(new int[] { m.getClass().getField("amount").getInt(m) });
+          }
+          Object f = res.getClass().getMethod("getFluid").invoke(res);
+          r.out.add("fluid:" + f.getClass().getMethod("getName").invoke(f));
+          r.outMeta.add(new int[] { res.getClass().getField("amount").getInt(res), 10000 });
+          all.add(r);
+          tcon++;
+        } catch (Throwable t) { skipped++; }
+      }
+      System.out.println("[texturedump] read " + tcon + " Tinkers' Construct recipes");
+    } catch (Throwable t) {
+      System.out.println("[texturedump] no Tinkers' Construct recipes: " + t);
+    }
 
     // keep what leads to a food: start from the foods, take every recipe making something needed, need its
     // ingredients, repeat. an output matches a needed "name:damage" or a needed "name:32767" (any damage)
