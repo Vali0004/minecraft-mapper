@@ -1137,7 +1137,7 @@ json full_plan(const Solved &s, const FoodGroup *g, int target, double qty, int 
     for (size_t i = 0; i < rc.in.size(); i++) {
       int a = uses[i];
       if (a < 0) continue;
-      if (!route_items.count(a) && held_of(g, a) <= 0 && !s.free[a]) return;
+      if (!route_items.count(a) && held_of(g, a) <= 0 && !s.free[a] && !(rc.in[i].count == 0 && circuit_key[a])) return;
       if (rc.in[i].count > 0) in[keys[a]] = in.value(keys[a], 0) + rc.in[i].count;
       else if (!circuit_key[a]) tools.push_back(keys[a]);
     }
@@ -1231,8 +1231,9 @@ json full_plan(const Solved &s, const FoodGroup *g, int target, double qty, int 
     if (item < 0) continue;
     double held = item == target ? 0 : held_of(g, item);
     if (held > 0) problem["held"][keys[item]] = held;
-    problem["value"][keys[item]] = s.value[item] > 0 ? s.value[item] :
-                                      keys[item].starts_with("fluid:") ? MB : ITEM;
+    // Held items have an opportunity cost even when their replacement path is unusually cheap.
+    // Otherwise the optimizer spends six extra ingots to save a few thousand EU on a plate batch.
+    problem["value"][keys[item]] = max(s.value[item], keys[item].starts_with("fluid:") ? MB : ITEM / 8);
     if (s.free[item]) problem["free"].push_back(keys[item]);
     if (item != target && !s.free[item] && !circuit_key[item] && made_by[item].empty())
       problem["gather"][keys[item]] = PRECIOUS * problem["value"][keys[item]].get<double>();
