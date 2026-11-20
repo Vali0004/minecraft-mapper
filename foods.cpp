@@ -1802,7 +1802,8 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       return (bool)(assembled[k] = 0);
     // GregTech's placed frames, casings, pipes, cables and machines are built things even when made from one
     // material (macerating a steel frame back to dust is scrapping it).
-    if (key.starts_with("gregtech:gt.blockmachines") || key.starts_with("gregtech:gt.blockframes") ||
+    if (key.starts_with("IC2:blockMiningPipe:") || key.starts_with("IC2:blockMiningTip:") ||
+        key.starts_with("gregtech:gt.blockmachines") || key.starts_with("gregtech:gt.blockframes") ||
         key.starts_with("gregtech:gt.blockcasings")) return (bool)(assembled[k] = 1);
     bool any = false;
     for (int r : made_by[k]) {
