@@ -597,9 +597,8 @@ struct TreeBuild {
   // what the whole plan makes: never an ingredient inside its own plan (steel ingots from steel plates bent from
   // steel ingots), except held stock of it going into a machine the plan builds
   int target = -1;
-  // what the plan is for: its top recipe is judged for this amount, not a typical one
+  // the item currently being planned, including when a held ingredient needs topping up
   int root = -1;
-  double root_qty = 0;
 
   void put(int k, json node) {
     nodes[keys[k]] = move(node);
@@ -614,14 +613,15 @@ struct TreeBuild {
     }
   }
   // the recipes worth trying for k, cheapest first (fewest steps: just the one the step solve found)
-  vector<int> candidates(int k) {
+  vector<int> candidates(int k, double qty) {
     if (!thrifty) return s.best[k] >= 0 ? vector<int>{s.best[k]} : vector<int>{};
     vector<pair<double, int>> c;
     for (int r : made_by[k]) {
       double per = made_per_run(recipes[r], k);
       if (per <= 0 || !allowed(s, r) || !machine_ok(s, recipes[r])) continue;
-      // the top of the plan is judged for the amount asked, deeper ones for a typical amount
-      double sc = route_score(s, recipes[r], k, k == root ? root_qty : 0);
+      // Score a child for what its parent needs, including the number of parent runs. A one-gear
+      // subrecipe should not be ranked as if the plan needs a stack of gears.
+      double sc = route_score(s, recipes[r], k, qty);
       if (sc < INFINITY) c.emplace_back(sc, r);
     }
     sort(c.begin(), c.end());
@@ -661,9 +661,11 @@ struct TreeBuild {
     return a;
   }
   // make k with recipe r: every slot from its cheapest alternative that works
-  bool with(int k, int r, int d) {
+  bool with(int k, int r, int d, double qty) {
     size_t mark = added.size();
     json ju = json::array();
+    double per = made_per_run(recipes[r], k);
+    double runs = per > 0 && qty > 0 ? ceil(qty / per - 1e-9) : 1;
     for (auto &slot : recipes[r].in) {
       if (slot.alts.empty()) {
         ju.push_back(nullptr);
@@ -671,7 +673,7 @@ struct TreeBuild {
       }
       bool ok = false;
       for (int a : alts(slot))
-        if (add(a)) {
+        if (add(a, -1, false, slot.count > 0 ? runs * slot.count : 1)) {
           ju.push_back(keys[a]);
           ok = true;
           break;
@@ -686,7 +688,7 @@ struct TreeBuild {
     if (!owns(s, recipes[r])) {
       int m = machine_to_build(s, recipes[r]);
       building++;
-      bool built = m >= 0 && add(m);
+      bool built = m >= 0 && add(m, -1, false, 1);
       building--;
       if (!built) {
         back_to(mark);
@@ -731,7 +733,7 @@ struct TreeBuild {
     };
     return walk(k);
   }
-  bool add(int k, int force = -1, bool make = false) {
+  bool add(int k, int force = -1, bool make = false, double qty = 0) {
     if (k == target && !stack.empty() && !(building > 0 && cost_of(s, k) == 0)) return false;
     // already planned: reuse it, unless it needs what's being made higher up (that would be a loop: more
     // annealed copper ingots from macerating the wire the plan makes out of annealed copper ingots)
@@ -767,14 +769,14 @@ struct TreeBuild {
         return thrifty ? sc(x) < sc(y) : s.dist[x] < s.dist[y];
       });
       for (int k2 : ks)
-        if (add(k2)) {
+        if (add(k2, -1, false, qty)) {
           put(k, {d, -1, json::array({keys[k2]})});
           ok = true;
           break;
         }
     } else {
-      for (int r : force >= 0 ? vector<int>{force} : candidates(k))
-        if ((ok = with(k, r, d))) break;
+      for (int r : force >= 0 ? vector<int>{force} : candidates(k, qty))
+        if ((ok = with(k, r, d, qty))) break;
     }
     // the plan's own target isn't partial: what's held of it doesn't count, it's being made
     if (ok && make && k != root) {
@@ -900,9 +902,8 @@ void fill_shortfalls(const Solved &s, const FoodGroup *g, int k, double qty, jso
       // judged for what's missing, not a typical amount: making 4 more wires is one wiremill step, not 2x, 4x and
       // 8x wire crafted back down (cheaper per wire for 64, not for 4)
       b.root = kk;
-      b.root_qty = want - have[key];
       b.target = k;
-      if (b.add(kk, -1, true)) grew = true;
+      if (b.add(kk, -1, true, want - have[key])) grew = true;
       else {
         b.back_to(0);
         nodes[key] = {0};
@@ -979,11 +980,10 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     TreeBuild b{*use, n2, r2, named2, seen2};
     b.scarce = &avoid;
     b.root = k;
-    b.root_qty = qty;
     b.target = k;
     // the target is made even when some is held: looking it up is wanting more of it. something nothing makes
     // stays held (or unreachable)
-    if (!b.add(k, force, !made_by[k].empty())) return false;
+    if (!b.add(k, force, !made_by[k].empty(), qty)) return false;
     // planning around something can leave no way at all: that's no plan, not a plan that uses nothing up
     if (auto root = n2.find(keys[k]); root == n2.end() || root->at(0).is_null()) return false;
     fill_shortfalls(*use, g, k, qty, n2, r2, named2, seen2, &avoid);
