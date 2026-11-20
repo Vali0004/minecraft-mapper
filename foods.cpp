@@ -58,6 +58,8 @@ map<string, vector<string>> sources;  // item key -> loot bags and quests that g
 map<string, string> fluid_names;  // texture-dump's fluids.json
 map<string, string> machine_names;  // texture-dump's recipe_maps.json: GT recipe map -> its name in game
 unordered_map<string, int> icon_of;  // texture-dump's item_icons.json: key -> cell in item_icons.png
+// item -> the picture of any damage of it, for items whose damages are all the same thing (same name)
+unordered_map<string, int> icon_of_item;
 int icon_size = 16, icon_columns = 0;
 string icons_png;
 // a hash of the sheet: pages ask for icons.png?v=<it>, so a new sheet is a new address and no browser keeps
@@ -77,6 +79,8 @@ json icons_json(const set<int> &named) {
     // "any damage": the plain damage 0 picture (not for a circuit, circuit 0's picture would show the wrong number)
     if (f == icon_of.end() && wild[k]) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
     if (f != icon_of.end()) icons[keys[k]] = f->second;
+    // a damage without its own picture, of an item that's the same thing at every damage (an IC2 battery's charge)
+    else if (auto g = icon_of_item.find(keys[k].substr(0, keys[k].rfind(':'))); g != icon_of_item.end()) icons[keys[k]] = g->second;
   }
   return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}, {"version", icons_version}};
 }
@@ -974,6 +978,14 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       icon_size = ic["size"].get<int>();
       icon_columns = ic["columns"].get<int>();
       for (auto &[k, v] : ic["icons"].items()) icon_of[k] = v.get<int>();
+      // items whose pictured damages all have one name: any of their pictures stands for all of them
+      map<string, set<string>> names_of;
+      for (auto &[k, v] : icon_of)
+        if (k.compare(0, 6, "fluid:") != 0) names_of[k.substr(0, k.rfind(':'))].insert(namer(k));
+      for (auto &[k, v] : icon_of) {
+        string item = k.substr(0, k.rfind(':'));
+        if (k.compare(0, 6, "fluid:") != 0 && names_of[item].size() == 1) icon_of_item.emplace(item, v);
+      }
       icons_png = readFile(dir / "item_icons.png");
       char v[17];
       snprintf(v, sizeof(v), "%016zx", hash<string>{}(icons_png));

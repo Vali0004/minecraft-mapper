@@ -1554,6 +1554,12 @@ static void load_dump(const path &dir) {
       if (names != item_names.end()) {
         auto n = names->second.find(atoi(key.c_str() + c + 1));
         if (n != names->second.end()) return n->second;
+        // a damage the dump didn't list, of an item whose every listed damage has the same name (IC2's batteries
+        // and tools keep their charge or wear in it): that name. not for items whose damages are different
+        // things (GregTech's meta items)
+        bool same = !names->second.empty();
+        for (auto &[d, nm] : names->second) same &= nm == names->second.begin()->second;
+        if (same) return names->second.begin()->second;
       }
       return key;
     });
