@@ -44,6 +44,9 @@ a { color: var(--accent); }
 
 .title { display: flex; gap: 14px; align-items: center; margin-bottom: 4px; }
 .icon.lg { width: 48px; height: 48px; }
+.icon.xs { width: 16px; height: 16px; vertical-align: -3px; margin-right: 4px; }
+.ilink { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent); text-underline-offset: 2px; }
+.ilink:focus-visible { outline: 2px solid var(--accent); }
 .title h2 { font-size: 22px; margin: 0; overflow-wrap: anywhere; }
 .key { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 
@@ -104,6 +107,11 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .missingb { background: var(--held-soft); color: var(--held); }
 .nomachine { background: var(--bad-soft); color: var(--bad); }
 .yield { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip.build { background: var(--accent-soft); color: var(--accent); }
+.chip.recycle { background: var(--line); color: var(--muted); }
+.tree ul { list-style: none; margin: 6px 0 0; padding-left: 18px; border-left: 1px solid var(--line); }
+.tree li { margin: 4px 0; font-size: 14px; }
+.via { color: var(--muted); font-size: 12px; }
 .hint { background: var(--held-soft); border-color: transparent; color: var(--text); font-size: 14px; }
 /* a recipe in words, under its picture */
 .words { margin-top: 8px; font-size: 13px; line-height: 1.6; color: var(--muted); }
@@ -147,7 +155,7 @@ const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
-let current = null, forced = null, onlyReady = false, sortBy = store.get("recipes.sort") || "route", names = {};
+let current = null, planQty = null, forced = null, onlyReady = false, sortBy = store.get("recipes.sort") || "route", names = {};
 const icons = { size: 16, columns: 128, cells: {} };
 const isFluid = k => k.startsWith("fluid:");
 const name = k => names[k] || k;
@@ -174,11 +182,20 @@ function icon(k, cls = "") {
   const c = icons.cells[k];
   if (c === undefined) { const s = el("span", "icon none " + cls, (name(k).replace(/^any /, "")[0] || "?").toUpperCase()); return s; }
   const s = el("span", "icon " + cls);
-  const px = cls === "sm" ? 24 : cls === "lg" ? 48 : 32;
+  const px = cls === "xs" ? 16 : cls === "sm" ? 24 : cls === "lg" ? 48 : 32;
   s.style.backgroundImage = "url(icons.png)";
   s.style.backgroundSize = `${icons.columns * px}px auto`;
   s.style.backgroundPosition = `-${(c % icons.columns) * px}px -${Math.floor(c / icons.columns) * px}px`;
   return s;
+}
+
+// an item named in text: its small picture and name, clicking opens it
+function itemLink(k) {
+  const b = el("button", "ilink");
+  b.title = k;
+  b.append(icon(k, "xs"), name(k));
+  b.addEventListener("click", () => open(k));
+  return b;
 }
 
 // one slot: the item, its count, clicking opens it. opts: tag (a step number), missing, kept
@@ -273,24 +290,31 @@ async function search() {
 }
 
 // the plan: which recipe makes what, in which order, how many times, from how much of what you have
-function plan(route, target, qty) {
+// the plan: which recipe makes what, in which order, how many times, from how much of what you have. a node is
+// [steps] when held, [steps, recipe, uses, extra?] when made (extra.machine: a machine to build first,
+// extra.partial: some is held, make the rest), [steps, -1, [key]] for "any damage" made as a specific one
+function plan(route, target, qty, have) {
   const N = route.nodes, R = route.recipes;
-  const canon = k => { let n = N[k]; while (n && n.length === 3 && n[1] === -1) { k = n[2][0]; n = N[k]; } return k; };
-  const made = k => { const n = N[k]; return n && n[0] !== null && n[0] > 0 && n.length === 3 && n[1] >= 0; };
+  const canon = k => { let n = N[k]; while (n && n.length >= 3 && n[1] === -1) { k = n[2][0]; n = N[k]; } return k; };
+  const made = k => { const n = N[k]; return n && n[0] !== null && n.length >= 3 && n[1] >= 0; };
+  const extra = k => (N[k] && N[k][3]) || {};
   const order = [], seen = new Set();
   (function dfs(k) {
     k = canon(k);
     if (seen.has(k)) return;
     seen.add(k);
     if (!made(k)) return;
+    if (extra(k).machine) dfs(extra(k).machine);
     for (const u of N[k][2]) if (u) dfs(u);
     order.push(k);
   })(target);
-  const need = new Map([[canon(target), qty]]), runs = new Map(), tools = new Set();
+  const need = new Map([[canon(target), qty]]), runs = new Map(), tools = new Set(), machines = new Set(), fromStore = new Map();
   for (const k of [...order].reverse()) {
     const [, ri, uses] = N[k], r = R[ri];
     const per = r.out.filter(o => o[0] === k).reduce((a, [, n, c]) => a + n * c / 10000, 0) || 1;
-    const times = Math.ceil((need.get(k) || 0) / per - 1e-9);
+    let want = need.get(k) || 0;
+    if (extra(k).partial) { const h = Math.min(have[k] ?? 0, want); fromStore.set(k, h); want -= h; }
+    const times = Math.ceil(want / per - 1e-9);
     runs.set(k, times);
     uses.forEach((u, i) => {
       if (!u) return;
@@ -298,24 +322,60 @@ function plan(route, target, qty) {
       if (r.in[i] === 0) { tools.add(c); need.set(c, Math.max(need.get(c) || 0, 1)); }
       else need.set(c, (need.get(c) || 0) + times * r.in[i]);
     });
+    if (extra(k).machine) { const m = canon(extra(k).machine); machines.add(m); need.set(m, Math.max(need.get(m) || 0, 1)); }
   }
   const step = new Map(order.map((k, i) => [k, i + 1]));
-  const leaves = [...need.keys()].filter(k => !made(k));
-  return { order, need, runs, tools, step, leaves, canon };
+  const leaves = [...need.keys()].filter(k => !made(k) || fromStore.get(k) > 0);
+  return { order, need, runs, tools, machines, step, leaves, canon, fromStore, extra };
 }
+
+// why it can't be made: the closest recipe, what it lacks, and the same for each of those
+function blockerTree(b, depth = 0) {
+  const li = el("li"), line = el("span");
+  line.append(itemLink(b.key));
+  const rc = b.recipe != null ? lastRoute.recipes[b.recipe] : null;
+  if (b.gathered) line.append(" ", el("span", "short", "none held, and nothing makes it: gather it"));
+  else if (rc) line.append(" ", el("span", "via", `via ${machine(rc)}${rc.tier >= 0 ? ", " + TIERS[rc.tier] : ""}`));
+  if (b.machine) {
+    const m = b.machine;
+    line.append(" ", el("span", "short", `needs a ${m.name}${m.tier >= 0 ? " that runs " + TIERS[m.tier] : ""}` +
+      (m.have >= 0 ? `, yours runs ${TIERS[m.have]}` : ", you have none") + ", and one can't be built from what you have"));
+  }
+  if (b.more) line.append(" ", el("span", "muted", "(and more)"));
+  li.append(line);
+  if (b.missing?.length) {
+    const ul = el("ul");
+    for (const m of b.missing) ul.append(blockerTree(m, depth + 1));
+    li.append(ul);
+  }
+  return li;
+}
+let lastRoute = null;
 
 function howTo(r, key, qty) {
   const parts = [];
   const route = r.route, root = route.nodes[key];
+  lastRoute = route;
   const groupName = $("group").selectedOptions[0]?.textContent || "";
   if (!root || root[0] === null) {
-    parts.push(el("p", "muted", `${groupName} can't make this yet: something it needs isn't held, or no machine for it is owned. The recipes below show what's missing in red.`));
+    const card = el("div", "card tree");
+    card.append(el("div", null, `${groupName} can't make this, even building machines: something at the bottom of every way to it is missing.`));
+    if (r.blockers) { const ul = el("ul"); ul.append(blockerTree(r.blockers)); card.append(ul); }
+    parts.push(card);
     return parts;
   }
-  const p = plan(route, key, qty);
+  const p = plan(route, key, qty, r.have || {});
   if (root[0] === 0 && !p.order.length) {
     parts.push(el("p", "muted", `${groupName} already has ${amount(key, r.have[key] ?? 0)}.`));
     return parts;
+  }
+  // machines to build first
+  if (p.machines.size) {
+    const n = el("div", "card hint");
+    n.append(`This needs ${p.machines.size === 1 ? "a machine" : "machines"} you don't have yet: `);
+    [...p.machines].forEach((m, i) => { if (i) n.append(", "); n.append(itemLink(m), p.step.has(m) ? ` (step ${p.step.get(m)})` : " (you hold one, place it)"); });
+    n.append(". The plan builds it.");
+    parts.push(n);
   }
   // what you need to start
   const needCard = el("div", "card"), grid = el("div", "needs");
@@ -323,20 +383,23 @@ function howTo(r, key, qty) {
   needCard.lastChild.style.marginBottom = "8px";
   for (const k of p.leaves.sort((a, b) => p.tools.has(a) - p.tools.has(b) || name(a).localeCompare(name(b)))) {
     if (circuitOf(k) !== null || k === "fluid:water") continue;
-    const want = p.need.get(k), have = r.have[k];
+    const partial = p.fromStore.has(k);
+    const want = partial ? p.fromStore.get(k) : p.need.get(k), have = r.have[k];
     const row = el("div", "need"), t = el("div", "t");
     t.append(el("div", "nm", name(k)));
     const ct = el("div", "ct");
-    if (p.tools.has(k)) ct.append(el("span", "muted", "tool, not used up · "));
-    ct.append(`need ${amount(k, want)}`);
-    if (have !== undefined) ct.append(" · ", el("span", have >= want ? "ok" : "short", have >= want ? `have ${amount(k, have)}` : `have ${amount(k, have)}, short ${amount(k, want - have)}`));
+    if (p.tools.has(k) || p.machines.has(k)) ct.append(el("span", "muted", (p.machines.has(k) ? "machine" : "tool") + ", not used up · "));
+    if (partial) ct.append(`all ${amount(k, want)} you have, the rest made in step ${p.step.get(k)}`);
+    else {
+      ct.append(`need ${amount(k, want)}`);
+      if (have !== undefined) ct.append(" · ", el("span", have >= want ? "ok" : "short", have >= want ? `have ${amount(k, have)}` : `have ${amount(k, have)}, short ${amount(k, want - have)}`));
+    }
     t.append(ct);
     row.append(slot(k, 0), t);
     grid.append(row);
   }
   needCard.append(grid);
-  const extra = p.leaves.includes("fluid:water") ? ["Water from any source."] : [];
-  if (extra.length) needCard.append(el("div", "muted", extra.join(" ")));
+  if (p.leaves.includes("fluid:water")) needCard.append(el("div", "muted", "Water from any source."));
   parts.push(needCard);
 
   // routed through a recipe picked below: say so, and how to go back
@@ -353,13 +416,18 @@ function howTo(r, key, qty) {
   p.order.forEach((k, i) => {
     const [, ri, uses] = route.nodes[k], rc = route.recipes[ri], times = p.runs.get(k);
     const li = el("li", "step"), head = el("div", "head");
-    head.append(el("span", "num", i + 1), el("span", "what", `Make ${amount(k, p.need.get(k))} ${name(k)}`));
+    const isMachine = p.machines.has(k);
+    const making = p.need.get(k) - (p.fromStore.get(k) || 0);
+    head.append(el("span", "num", i + 1), el("span", "what", `${isMachine ? "Build" : "Make"} ${amount(k, making)} ${name(k)}`));
     const how = [machine(rc)];
     if (power(rc)) how.push(power(rc));
     head.append(el("span", "how", how.join(" · ")));
     const circ = uses.map(circuitOf).find(c => c !== null);
     if (circ !== undefined && circ !== null) head.append(el("span", "chip circuit", `circuit ${circ}`));
     if (times > 1) head.append(el("span", "chip", `do it ${times}×`));
+    const m = p.extra(k).machine;
+    if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
+    if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
     li.append(head);
     const ins = uses.map((u, j) => {
       if (!u) return [null, 0];
@@ -392,7 +460,9 @@ function altCard(p, key, best) {
   const cls = p.state === "ready" ? "ready" : p.state === "no machine" ? "nomachine" : "missingb";
   h.append(el("strong", null, machine(p)));
   if (power(p)) h.append(el("span", "muted", power(p)));
-  h.append(el("span", "badge " + cls, p.state === "ready" ? `you can make it · ${p.steps} step${p.steps > 1 ? "s" : ""}` : p.state === "no machine" ? "no machine for it" : "missing ingredients"));
+  h.append(el("span", "badge " + cls, p.state === "ready" ? (p.build ? "you can make it, once you build the machine" : "you can make it now") : p.state === "no machine" ? "no machine for it, and you can't build one yet" : "missing ingredients"));
+  if (p.build) { const b = el("span", "chip build"); b.append("build: ", itemLink(p.build)); h.append(b); }
+  if (p.recycling) h.append(el("span", "chip recycle", "takes something apart"));
   const y = p.yield;
   h.append(el("span", "yield", `${amount(key, y.per)} per run` + (y.ratio !== null ? ` · ${fmt(y.ratio * 100)}% of ${isFluid(key) ? "fluid" : "items"} in` : "")));
   const circ = p.slots.map(s => s.alts.length ? circuitOf(s.alts[0][0]) : null).find(x => x !== null);
@@ -424,12 +494,12 @@ function altCard(p, key, best) {
 
 // one item: how to make it, then every recipe making it
 async function open(key, push = true) {
-  if (key !== current) forced = null;
+  if (key !== current) { forced = null; planQty = null; }
   current = key;
   if (push) history.replaceState(null, "", `#g=${encodeURIComponent($("group").value)}&k=${encodeURIComponent(key)}`);
   for (const b of $("results").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.key === key);
   $("detail").replaceChildren(el("p", "muted", "Loading…"));
-  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}${forced != null ? "&recipe=" + forced : ""}`)).json();
+  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}${forced != null ? "&recipe=" + forced : ""}${planQty != null ? "&qty=" + planQty : ""}`)).json();
   if (current !== key) return;
   if (r.error) { $("detail").replaceChildren(el("p", "muted", r.error)); return; }
   learn(r);
@@ -447,15 +517,25 @@ function render(r, key, qty) {
 
   const hh = el("h3", null, "How to make it"); hh.id = "howto";
   parts.push(hh);
-  const q = qty ?? (isFluid(key) ? 1000 : 1);
+  const q = r.qty ?? (isFluid(key) ? 1000 : 1);
   const qrow = el("div", "qtyrow"), input = el("input", "qty");
   input.type = "number"; input.min = 1; input.value = q;
   input.setAttribute("aria-label", "How many to make");
   qrow.append(el("span", null, "Make"), input, el("span", "muted", isFluid(key) ? "mB" : ""));
   const body = el("div");
-  const redo = () => body.replaceChildren(...howTo(r, key, Math.max(1, +input.value || 1)));
-  input.addEventListener("input", redo);
-  redo();
+  body.replaceChildren(...howTo(r, key, q));
+  // what's short depends on how much: plan again for the new amount (keeping the page where it is)
+  let qtimer = 0;
+  input.addEventListener("input", () => {
+    clearTimeout(qtimer);
+    qtimer = setTimeout(() => {
+      const v = Math.max(1, +input.value || 1);
+      if (v === q) return;
+      planQty = v;
+      const y = window.scrollY;
+      open(key, false).then(() => { window.scrollTo({ top: y }); const i = document.querySelector("input.qty"); i?.focus(); });
+    }, 400);
+  });
   if (r.route.nodes[key]?.[0] > 0) parts.push(qrow);
   parts.push(body);
 

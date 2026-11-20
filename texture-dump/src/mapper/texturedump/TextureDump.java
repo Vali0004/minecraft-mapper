@@ -562,7 +562,7 @@ public class TextureDump {
   static class Recipe {
     String type;
     int eut;
-    int w, h;  // a shaped crafting recipe's grid, its slots row by row with empty ones kept; 0 for shapeless
+    int w, h;  // a shaped crafting recipe's grid, its slots row by row with empty ones kept, 0 for shapeless
     final List<List<String>> in = new ArrayList<>();  // each alternative: "mod:name:damage", "fluid:name", damage 32767 is any
     final List<int[]> inMeta = new ArrayList<>();    // per slot: count (0 for not consumed: tools, GT circuits and molds), fluid mB
     final List<String> out = new ArrayList<>();

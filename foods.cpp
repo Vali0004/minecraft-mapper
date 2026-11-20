@@ -21,7 +21,7 @@ namespace {
 const int INF = INT_MAX / 2;
 
 struct Slot {
-  int count;  // 0: not used up (a HarvestCraft tool, a GT circuit or mold); for a fluid, mB
+  int count;  // 0: not used up (a HarvestCraft tool, a GT circuit or mold), for a fluid it's mB
   vector<int> alts;
 };
 struct Out {
@@ -75,6 +75,19 @@ bool loaded = false;
 
 vector<vector<int>> made_by;     // key -> recipes with it as an output
 vector<int> used_in;             // key -> how many recipes take it
+// per recipe: it takes something apart (its input is itself made from what it gives: melting a polyethylene rod,
+// emptying a cell, macerating a machine). listed last, never a route's way to a held thing's worth
+vector<bool> recycling;
+// per recipe: a plan may use it. not one taking something apart (macerating a machine, melting down parts: it
+// destroys what was made), except emptying a container (a cell, can, capsule in the fluid canner)
+vector<bool> plannable;
+// per key: a GregTech programmed circuit. free as a machine's setting (a slot that isn't used up), but a recipe
+// that uses one up needs a real one
+vector<bool> circuit_key;
+// per recipe type: the GT machines that run it, as items (key, tier, multiblock), so a plan can build one
+struct MachineItem { int key, tier; bool multi; };
+vector<vector<MachineItem>> machine_items;
+set<int> multi_keys;
 vector<vector<int>> keys_of_name;
 vector<string> search_names;     // key -> lowercase display name, built on the first search
 
@@ -140,30 +153,67 @@ string display(int k) {
 }
 
 struct Solved {
-  vector<int> dist, best, any;  // per key: steps from what's held, the recipe that does it; per item: best over damages
+  bool build = false;  // may plan building machines the group doesn't have
+  vector<bool> held;   // per key: really in the group's storage (not just free: water, circuits)
+  vector<int> dist, best, any;  // per key: steps from what's held, the recipe that does it. per item: best over damages
   vector<int> tier;             // per recipe type: the best voltage tier the group can run it at, -1 for none
   // per key: how much of the group's holdings one of it (one mB for a fluid) uses up on its cheapest route, and
-  // that route's recipe (-1 when held); per item: the cheapest over damages. INFINITY when unreachable
+  // that route's recipe (-1 when held). per item: the cheapest over damages. INFINITY when unreachable
   vector<double> cost, cost_any;
   vector<int> cheapest;
+  // per key: what one held unit is worth (0 for what isn't held). a held thing that can be made is worth what
+  // making another would cost, so a route doesn't use up something valuable (recycle a held machine for its dust)
+  vector<double> value;
 };
 
 int cost_of(const Solved &s, int alt) { return wild[alt] ? s.any[name_of[alt]] : s.dist[alt]; }
+// a slot's alternative can be used: a circuit only as a setting, unless one is really held
+bool usable(const Solved &s, const Slot &slot, int alt) { return !circuit_key[alt] || slot.count == 0 || s.held[alt]; }
 double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[alt]] : s.cost[alt]; }
 
 // what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
 // also costs a little, so of two equally thrifty routes the shorter wins
-const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0.05;
+const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0.05, PRECIOUS = 16;
 
-// what one run of recipe r uses up, in held-material terms; INFINITY if a slot can't be had
+bool owns(const Solved &s, const Recipe &rc) {
+  return s.tier[rc.type] >= 0 && (rc.eut <= 0 || tier_for(rc.eut) <= s.tier[rc.type]);
+}
+// a multiblock controller is only part of the machine, the structure around it costs a lot more
+const double MULTIBLOCK = 4;
+// the machine to build for a recipe the group can't run: the cheapest reachable one of the right voltage, -1 if
+// none (or not building). by step count when the costs aren't known yet
+int machine_to_build(const Solved &s, const Recipe &rc) {
+  if (!s.build) return -1;
+  int need = rc.eut > 0 ? tier_for(rc.eut) : 0, best = -1;
+  double bc = INFINITY;
+  for (auto &m : machine_items[rc.type]) {
+    if (m.tier < need || s.dist[m.key] >= INF) continue;
+    double c = s.cost.empty() ? s.dist[m.key] : s.dist[m.key] == 0 ? 0 : s.cost[m.key] * (m.multi ? MULTIBLOCK : 1);
+    if (c < bc) bc = c, best = m.key;
+  }
+  return best;
+}
+bool can_run(const Solved &s, const Recipe &rc) { return owns(s, rc) || machine_to_build(s, rc) >= 0; }
+bool is_multi(int key) { return multi_keys.count(key) > 0; }
+
+// what one run of recipe r uses up, in held-material terms, INFINITY if a slot can't be had. a tool (a slot
+// that isn't used up) costs nothing when held, otherwise what making one costs: charged every run, which only
+// matters to the ranking (a plan makes it once)
 double run_cost(const Solved &s, const Recipe &rc) {
   double c = PER_RUN;
   for (auto &slot : rc.in) {
     if (slot.alts.empty()) continue;
     double b = INFINITY;
-    for (int a : slot.alts) b = min(b, raw_of(s, a));
+    for (int a : slot.alts)
+      if (usable(s, slot, a)) b = min(b, slot.count == 0 && cost_of(s, a) == 0 ? 0.0 : raw_of(s, a));
     if (b == INFINITY) return INFINITY;
-    c += slot.count * b;
+    c += (slot.count == 0 ? 1 : slot.count) * b;
+  }
+  // a machine to build counts like a tool
+  if (!owns(s, rc)) {
+    int m = machine_to_build(s, rc);
+    if (m < 0) return INFINITY;
+    c += s.dist[m] == 0 ? 0 : s.cost[m] * (is_multi(m) ? MULTIBLOCK : 1);
   }
   return c;
 }
@@ -178,8 +228,9 @@ double made_per_run(const Recipe &rc, int k) {
 // how many recipe steps each key is from the group's holdings. a recipe works when its machine is owned (with
 // the voltage) and every slot has an alternative that's reachable, its outputs are one step past its slowest
 // slot. counts are ignored: holding one of an ingredient is enough, so "craftable" can mean "once"
-Solved solve(const FoodGroup &g) {
+Solved solve(const FoodGroup &g, bool build) {
   Solved s;
+  s.build = build;
   s.dist.assign(keys.size(), INF);
   s.best.assign(keys.size(), -1);
   s.any.assign(name_index.size(), INF);
@@ -190,10 +241,14 @@ Solved solve(const FoodGroup &g) {
     if (name_of[k] >= 0 && d < s.any[name_of[k]]) s.any[name_of[k]] = d;
     return true;
   };
+  s.held.assign(keys.size(), false);
   for (auto &[key, count] : g.held) {
     if (count <= 0) continue;
     auto k = key_index.find(key);
-    if (k != key_index.end()) reach(k->second, 0, -1);
+    if (k != key_index.end()) {
+      reach(k->second, 0, -1);
+      s.held[k->second] = true;
+    }
     // a held damage no recipe names exactly still satisfies "any damage"
     auto n = name_index.find(key.substr(0, key.rfind(':')));
     if (n != name_index.end()) s.any[n->second] = 0;
@@ -223,12 +278,18 @@ Solved solve(const FoodGroup &g) {
     bool changed = false;
     for (int r = 0; r < (int)recipes.size(); r++) {
       const Recipe &rc = recipes[r];
-      if (tier[rc.type] < 0 || (rc.eut > 0 && tier_for(rc.eut) > tier[rc.type])) continue;
+      if (!plannable[r]) continue;
       int worst = 0;
+      if (!owns(s, rc)) {
+        int m = machine_to_build(s, rc);
+        if (m < 0) continue;
+        worst = s.dist[m];
+      }
       for (auto &slot : rc.in) {
         if (slot.alts.empty()) continue;  // an empty grid cell
         int best = INF;
-        for (int a : slot.alts) best = min(best, cost_of(s, a));
+        for (int a : slot.alts)
+          if (usable(s, slot, a)) best = min(best, cost_of(s, a));
         worst = max(worst, best);
         if (worst >= INF) break;
       }
@@ -239,10 +300,21 @@ Solved solve(const FoodGroup &g) {
   }
 
   // then the thriftiest route to each reachable key: keep relaxing "a run's inputs / what it makes" until
-  // nothing gets cheaper. what's held stays a leaf, use what you have before making more of it
-  s.cost.assign(keys.size(), INFINITY);
-  s.cost_any.assign(name_index.size(), INFINITY);
-  s.cheapest.assign(keys.size(), -1);
+  // nothing gets cheaper. what's held stays a leaf at its value, use what you have before making more of it
+  auto circuit = name_index.find("gregtech:gt.integrated_circuit");
+  auto base = [&](int k) {
+    // water and programmed circuits cost nothing (see above), an item 1, a fluid's mB 1/144
+    if (keys[k] == "fluid:water" || (circuit != name_index.end() && name_of[k] == circuit->second)) return 0.0;
+    return keys[k].compare(0, 6, "fluid:") == 0 ? MB : ITEM;
+  };
+  vector<int> runnable;
+  for (int r = 0; r < (int)recipes.size(); r++) {
+    const Recipe &rc = recipes[r];
+    if (!plannable[r] || (!owns(s, rc) && machine_to_build(s, rc) < 0)) continue;
+    bool useful = false;
+    for (auto &o : rc.out) useful |= s.dist[o.key] > 0 && s.dist[o.key] < INF;
+    if (useful) runnable.push_back(r);
+  }
   auto cheaper = [&](int k, double c, int r) {
     if (!(c < s.cost[k] * (1 - 1e-9))) return false;
     s.cost[k] = c;
@@ -250,43 +322,54 @@ Solved solve(const FoodGroup &g) {
     if (name_of[k] >= 0) s.cost_any[name_of[k]] = min(s.cost_any[name_of[k]], c);
     return true;
   };
-  // water and programmed circuits cost nothing (see above)
-  auto circuit = name_index.find("gregtech:gt.integrated_circuit");
-  for (int k = 0; k < (int)keys.size(); k++) {
-    if (s.dist[k] != 0) continue;
-    bool free = keys[k] == "fluid:water" || (circuit != name_index.end() && name_of[k] == circuit->second);
-    cheaper(k, free ? 0 : keys[k].compare(0, 6, "fluid:") == 0 ? MB : ITEM, -1);
-  }
-  for (size_t n = 0; n < name_index.size(); n++)
-    if (s.any[n] == 0 && s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
-  vector<int> runnable;
-  for (int r = 0; r < (int)recipes.size(); r++) {
-    const Recipe &rc = recipes[r];
-    if (tier[rc.type] < 0 || (rc.eut > 0 && tier_for(rc.eut) > tier[rc.type])) continue;
-    bool useful = false;
-    for (auto &o : rc.out) useful |= s.dist[o.key] > 0 && s.dist[o.key] < INF;
-    if (useful) runnable.push_back(r);
-  }
-  for (int pass = 0; pass < 200; pass++) {
-    bool changed = false;
-    for (int r : runnable) {
-      const Recipe &rc = recipes[r];
-      double c = run_cost(s, rc);
-      if (c == INFINITY) continue;
-      for (auto &o : rc.out) {
-        if (s.dist[o.key] == 0) continue;
-        double per = made_per_run(rc, o.key);
-        if (per > 0) changed |= cheaper(o.key, c / per, r);
+  auto relax = [&]() {
+    s.cost.assign(keys.size(), INFINITY);
+    s.cost_any.assign(name_index.size(), INFINITY);
+    s.cheapest.assign(keys.size(), -1);
+    for (int k = 0; k < (int)keys.size(); k++)
+      if (s.dist[k] == 0) cheaper(k, s.value[k], -1);
+    for (size_t n = 0; n < name_index.size(); n++)
+      if (s.any[n] == 0 && s.cost_any[n] == INFINITY) s.cost_any[n] = ITEM;  // held under a damage no recipe names
+    for (int pass = 0; pass < 200; pass++) {
+      bool changed = false;
+      for (int r : runnable) {
+        const Recipe &rc = recipes[r];
+        double c = run_cost(s, rc);
+        if (c == INFINITY) continue;
+        for (auto &o : rc.out) {
+          if (s.dist[o.key] == 0) continue;
+          double per = made_per_run(rc, o.key);
+          if (per > 0) changed |= cheaper(o.key, c / per, r);
+        }
       }
+      if (!changed) break;
     }
-    if (!changed) break;
+  };
+  // first everything held at its plain worth
+  s.value.assign(keys.size(), 0);
+  for (int k = 0; k < (int)keys.size(); k++)
+    if (s.dist[k] == 0) s.value[k] = base(k);
+  relax();
+  // then what held things that can be made are worth: what making one more costs from the rest (never less than
+  // plain), or PRECIOUS when it can't be made now (use it if needed, but not to save a little elsewhere)
+  vector<double> value = s.value;
+  for (int k = 0; k < (int)keys.size(); k++) {
+    if (s.dist[k] != 0 || value[k] == 0 || made_by[k].empty()) continue;
+    double best = INFINITY;
+    for (int r : made_by[k]) {
+      const Recipe &rc = recipes[r];
+      if (!can_run(s, rc) || recycling[r]) continue;
+      double per = made_per_run(rc, k), c = run_cost(s, rc);
+      if (per > 0 && c < INFINITY) best = min(best, c / per);
+    }
+    value[k] = best == INFINITY ? PRECIOUS * base(k) : max(base(k), best);
   }
+  s.value = value;
+  relax();
   return s;
 }
 
-bool machine_ok(const Solved &s, const Recipe &rc) {
-  return s.tier[rc.type] >= 0 && (rc.eut <= 0 || tier_for(rc.eut) <= s.tier[rc.type]);
-}
+bool machine_ok(const Solved &s, const Recipe &rc) { return can_run(s, rc); }
 
 json recipe_json(int r, set<int> &named) {
   const Recipe &rc = recipes[r];
@@ -299,6 +382,7 @@ json recipe_json(int r, set<int> &named) {
   json j = {{"t", types[rc.type]}, {"eut", rc.eut}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1}, {"in", in}, {"out", o}};
   if (rc.w > 0) j["w"] = rc.w, j["h"] = rc.h;
   if (auto m = machine_names.find(types[rc.type]); m != machine_names.end()) j["machine"] = m->second;
+  if (recycling[r]) j["recycling"] = true;
   return j;
 }
 
@@ -314,6 +398,8 @@ struct TreeBuild {
   vector<int> added;  // keys given a node, in order, to back out
   bool thrifty = true;
   int budget = 50000;
+  // held things there's too little of and no way to make more: not used, so the plan backs out to another way
+  const set<int> *scarce = nullptr;
 
   void put(int k, json node) {
     nodes[keys[k]] = move(node);
@@ -333,7 +419,7 @@ struct TreeBuild {
     vector<pair<double, int>> c;
     for (int r : made_by[k]) {
       double per = made_per_run(recipes[r], k);
-      if (per <= 0 || !machine_ok(s, recipes[r])) continue;
+      if (per <= 0 || !plannable[r] || !machine_ok(s, recipes[r])) continue;
       double rc = run_cost(s, recipes[r]);
       if (rc < INFINITY) c.emplace_back(rc / per, r);
     }
@@ -345,7 +431,7 @@ struct TreeBuild {
   vector<int> alts(const Slot &slot) {
     vector<int> a;
     for (int x : slot.alts)
-      if (cost_of(s, x) < INF) a.push_back(x);
+      if (cost_of(s, x) < INF && usable(s, slot, x)) a.push_back(x);
     if (thrifty)
       stable_sort(a.begin(), a.end(), [&](int x, int y) { return raw_of(s, x) < raw_of(s, y) || (raw_of(s, x) == raw_of(s, y) && cost_of(s, x) < cost_of(s, y)); });
     else
@@ -373,12 +459,23 @@ struct TreeBuild {
         return false;
       }
     }
-    put(k, {max(d, 1), r, ju});
+    json node = {max(d, 1), r, ju};
+    // a machine the group has to build first: made like a tool, the step says it runs on it
+    if (!owns(s, recipes[r])) {
+      int m = machine_to_build(s, recipes[r]);
+      if (m < 0 || !add(m)) {
+        back_to(mark);
+        return false;
+      }
+      node.push_back({{"machine", keys[m]}});
+    }
+    put(k, node);
     if (!jr.contains(to_string(r))) jr[to_string(r)] = recipe_json(r, named);
     return true;
   }
-  // give k a node; false if every way to it needs something being made higher up
-  bool add(int k, int force = -1) {
+  // give k a node, false if every way to it needs something being made higher up. make: k is held but not
+  // enough, make it anyway (the node says how much is held, the plan makes the rest)
+  bool add(int k, int force = -1, bool make = false) {
     if (seen.count(k)) return true;
     if (stack.count(k) || --budget < 0) return false;
     named.insert(k);
@@ -387,7 +484,8 @@ struct TreeBuild {
       put(k, {nullptr});
       return true;
     }
-    if (d == 0 && force < 0) {
+    if (d == 0 && force < 0 && !make && scarce && scarce->count(k)) return false;
+    if (d == 0 && force < 0 && !make) {
       put(k, {0});
       return true;
     }
@@ -408,6 +506,11 @@ struct TreeBuild {
       for (int r : force >= 0 ? vector<int>{force} : candidates(k))
         if ((ok = with(k, r, d))) break;
     }
+    if (ok && make) {
+      json &n = nodes[keys[k]];
+      if (n.size() < 4) n.push_back(json::object());
+      n[3]["partial"] = true;
+    }
     stack.erase(k);
     return ok;
   }
@@ -425,12 +528,257 @@ void add_tree(const Solved &s, int k, json &nodes, json &jr, set<int> &named, se
   b.add(k, force);
 }
 
+// how much of everything a plan needs, the same sums the page does: the made things in the order to make them
+// (each after what it needs), and per key how much is needed. a node made because too little is held
+// ("partial") uses all that's held, the rest is made
+struct Needs {
+  vector<string> order;
+  map<string, double> need;
+  set<string> tools;
+};
+Needs plan_needs(const json &nodes, const json &jr, const string &target, double qty, const map<string, int64_t> &have) {
+  Needs p;
+  auto canon = [&](string k) {
+    for (int i = 0; i < 64; i++) {
+      auto n = nodes.find(k);
+      if (n == nodes.end() || n->size() < 3 || (*n)[1].get<int>() != -1) break;
+      k = (*n)[2][0].get<string>();
+    }
+    return k;
+  };
+  auto made = [&](const string &k) {
+    auto n = nodes.find(k);
+    return n != nodes.end() && n->size() >= 3 && !(*n)[0].is_null() && (*n)[1].get<int>() >= 0;
+  };
+  set<string> seen;
+  auto machine = [&](const json &n) { return n.size() >= 4 && n[3].contains("machine") ? n[3]["machine"].get<string>() : string(); };
+  function<void(const string &)> dfs = [&](const string &k0) {
+    string k = canon(k0);
+    if (!seen.insert(k).second || !made(k)) return;
+    const json &n = nodes[k];
+    if (string m = machine(n); !m.empty()) dfs(m);
+    for (auto &u : n[2])
+      if (!u.is_null()) dfs(u.get<string>());
+    p.order.push_back(k);
+  };
+  dfs(target);
+  p.need[canon(target)] = qty;
+  for (auto it = p.order.rbegin(); it != p.order.rend(); ++it) {
+    const json &n = nodes[*it];
+    const json &rc = jr[to_string(n[1].get<int>())];
+    double per = 0;
+    for (auto &o : rc["out"])
+      if (o[0].get<string>() == *it) per += o[1].get<double>() * o[2].get<double>() / 10000;
+    double want = p.need[*it];
+    if (n.size() >= 4 && n[3].value("partial", false)) {  // partial: what's held first
+      auto h = have.find(*it);
+      want = max(0.0, want - (h != have.end() ? h->second : 0));
+    }
+    double runs = per > 0 ? ceil(want / per - 1e-9) : 0;
+    for (size_t i = 0; i < n[2].size(); i++) {
+      if (n[2][i].is_null()) continue;
+      string c = canon(n[2][i].get<string>());
+      int count = rc["in"][i].get<int>();
+      if (count == 0) {
+        p.tools.insert(c);
+        p.need[c] = max(p.need[c], 1.0);
+      } else p.need[c] += runs * count;
+    }
+    if (string m = machine(n); !m.empty()) {
+      p.tools.insert(m);
+      p.need[m] = max(p.need[m], 1.0);
+    }
+  }
+  return p;
+}
+
+// what the group holds of k: all damages together for "any damage"
+int64_t held_of(const FoodGroup *g, int k) {
+  if (!g) return 0;
+  if (wild[k]) {
+    int64_t n = 0;
+    string prefix = keys[k].substr(0, keys[k].rfind(':') + 1);
+    for (auto it = g->held.lower_bound(prefix); it != g->held.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it) n += it->second;
+    return n;
+  }
+  auto h = g->held.find(keys[k]);
+  return h != g->held.end() ? h->second : 0;
+}
+
+// a plan that needs more of a held thing than there is: make the rest, if there's a way to that doesn't need it.
+// repeated, since the new steps can come up short too
+void fill_shortfalls(const Solved &s, const FoodGroup *g, int k, double qty, json &nodes, json &jr, set<int> &named, set<int> &seen,
+                     const set<int> *scarce = nullptr) {
+  map<string, int64_t> have;
+  set<int> tried;
+  for (int round = 0; round < 6; round++) {
+    have.clear();
+    for (auto &[key, n] : nodes.items())
+      if (auto ki = key_index.find(key); ki != key_index.end()) have[key] = held_of(g, ki->second);
+    Needs p = plan_needs(nodes, jr, keys[k], qty, have);
+    bool grew = false;
+    for (auto &[key, want] : p.need) {
+      auto n = nodes.find(key);
+      if (n == nodes.end() || n->size() != 1 || n->at(0).is_null() || n->at(0).get<int>() != 0) continue;
+      int kk = key_index[key];
+      if (wild[kk] || s.value[kk] == 0 || have[key] >= want || made_by[kk].empty() || !tried.insert(kk).second) continue;
+      nodes.erase(key);
+      seen.erase(kk);
+      TreeBuild b{s, nodes, jr, named, seen};
+      b.scarce = scarce;
+      if (b.add(kk, -1, true)) grew = true;
+      else {
+        b.back_to(0);
+        nodes[key] = {0};
+        seen.insert(kk);
+      }
+    }
+    if (!grew) break;
+  }
+}
+
+// held things a plan needs more of than there is (after making what can be made)
+set<int> short_of(const FoodGroup *g, int k, double qty, const json &nodes, const json &jr) {
+  map<string, int64_t> have;
+  for (auto &[key, n] : nodes.items())
+    if (auto ki = key_index.find(key); ki != key_index.end()) have[key] = held_of(g, ki->second);
+  Needs p = plan_needs(nodes, jr, keys[k], qty, have);
+  set<int> out;
+  for (auto &[key, want] : p.need) {
+    auto n = nodes.find(key);
+    if (n == nodes.end() || n->size() != 1 || n->at(0).is_null() || n->at(0).get<int>() != 0) continue;
+    int kk = key_index[key];
+    if (circuit_key[kk] || key == "fluid:water" || have[key] >= want) continue;
+    out.insert(kk);
+  }
+  return out;
+}
+
+// the plan for qty of k: the thriftiest tree, short things made where they can be, and where they can't, planned
+// around (each round marks what's still short as scarce and plans again, keeping the last plan that worked)
+void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int force, json &nodes, json &jr, set<int> &named) {
+  set<int> scarce;
+  bool have_plan = false;
+  for (int round = 0; round < 4; round++) {
+    json n2 = json::object(), r2 = json::object();
+    set<int> seen2, named2;
+    TreeBuild b{s, n2, r2, named2, seen2};
+    b.scarce = &scarce;
+    bool ok = b.add(k, force);
+    if (!ok && !have_plan) {
+      // nothing works around what's short (or the thriftiest picks loop): the old way, short or not
+      n2 = json::object(), r2 = json::object(), seen2.clear(), named2.clear();
+      add_tree(s, k, n2, r2, named2, seen2, force);
+      ok = true;
+    }
+    if (!ok) break;
+    fill_shortfalls(s, g, k, qty, n2, r2, named2, seen2, &scarce);
+    nodes = move(n2), jr = move(r2);
+    named.insert(named2.begin(), named2.end());
+    have_plan = true;
+    set<int> more = short_of(g, k, qty, nodes, jr);
+    size_t before = scarce.size();
+    scarce.insert(more.begin(), more.end());
+    if (scarce.size() == before) break;
+  }
+}
+
+// how far k is from being makeable: 0 when it is, otherwise roughly how many things are missing underneath its
+// closest recipe, a few levels down (a recipe needing what it's making counts as hopeless)
+struct Missing {
+  const Solved &s;
+  map<pair<int, int>, int> memo;
+  set<int> stack;
+  int key(int k, int depth) {
+    if (cost_of(s, k) < INF) return 0;
+    if (made_by[k].empty() || depth <= 0) return 1;
+    if (stack.count(k)) return 1000;
+    if (auto m = memo.find({k, depth}); m != memo.end()) return m->second;
+    stack.insert(k);
+    int best = 1000;
+    for (int r : order(k)) best = min(best, recipe(r, depth));
+    stack.erase(k);
+    return memo[{k, depth}] = best;
+  }
+  // a key's recipes worth looking at: ones a plan would use first, then the fewest ingredients
+  vector<int> order(int k) {
+    vector<int> rs = made_by[k];
+    stable_sort(rs.begin(), rs.end(), [](int a, int b) {
+      if (plannable[a] != plannable[b]) return plannable[a] > plannable[b];
+      return recipes[a].in.size() < recipes[b].in.size();
+    });
+    if (rs.size() > 40) rs.resize(40);
+    return rs;
+  }
+  int recipe(int r, int depth) {
+    const Recipe &rc = recipes[r];
+    int n = (can_run(s, rc) ? 0 : 1) + (plannable[r] ? 0 : 3);
+    for (auto &slot : rc.in) {
+      if (slot.alts.empty()) continue;
+      int b = 1000;
+      for (size_t i = 0; i < slot.alts.size() && i < 3 && b > 0; i++)
+        b = min(b, usable(s, slot, slot.alts[i]) ? key(slot.alts[i], depth - 1) : 1000);
+      n += b;
+      if (n >= 1000) return 1000;
+    }
+    return n;
+  }
+};
+
+// why k can't be made: its closest recipe (by what's missing underneath), the machine it lacks, and for each
+// missing ingredient the same, a few levels down. machine: the recipe map's name, the tier it needs, the best
+// the group has
+json blockers(const Solved &s, int k, int depth, set<int> &stack) {
+  json out = {{"key", keys[k]}};
+  if (made_by[k].empty()) {
+    out["gathered"] = true;
+    return out;
+  }
+  Missing m{s};
+  int bestr = -1, bests = INT_MAX;
+  for (int r : m.order(k)) {
+    m.stack = stack;
+    m.stack.insert(k);
+    int sc = m.recipe(r, 3);
+    if (sc < bests) bests = sc, bestr = r;
+  }
+  if (bestr < 0) bestr = made_by[k][0];
+  const Recipe &rc = recipes[bestr];
+  out["recipe"] = bestr;
+  if (!can_run(s, rc)) {
+    auto mn = machine_names.find(types[rc.type]);
+    out["machine"] = {{"name", mn != machine_names.end() ? mn->second : types[rc.type]}, {"tier", rc.eut > 0 ? tier_for(rc.eut) : -1},
+                      {"have", s.tier[rc.type]}};
+  }
+  json missing = json::array();
+  stack.insert(k);
+  for (auto &slot : rc.in) {
+    if (slot.alts.empty()) continue;
+    bool any = false;
+    for (int a : slot.alts) any |= cost_of(s, a) < INF && usable(s, slot, a);
+    if (any) continue;
+    // the alternative closest to makeable
+    int a = slot.alts[0], as = INT_MAX;
+    for (size_t i = 0; i < slot.alts.size() && i < 6; i++) {
+      m.stack = stack;
+      int sc = m.key(slot.alts[i], 2) + wild[slot.alts[i]];
+      if (sc < as) as = sc, a = slot.alts[i];
+    }
+    if (depth <= 0 || stack.count(a)) missing.push_back({{"key", keys[a]}, {"more", true}});
+    else missing.push_back(blockers(s, a, depth - 1, stack));
+  }
+  stack.erase(k);
+  out["missing"] = missing;
+  return out;
+}
+
 // a group's solve for the current snapshot, kept until the next one. call with state_lock held
-shared_ptr<Solved> solved(const string &group) {
-  auto &c = solve_cache[group];
+// build: may plan building missing machines (the recipe pages). the food planner counts only what can be made now
+shared_ptr<Solved> solved(const string &group, bool build) {
+  auto &c = solve_cache[(build ? "build:" : "now:") + group];
   if (!c.second || c.first != generation) {
     auto g = snapshot.groups.find(group);
-    c = {generation, make_shared<Solved>(solve(g != snapshot.groups.end() ? g->second : FoodGroup{}))};
+    c = {generation, make_shared<Solved>(solve(g != snapshot.groups.end() ? g->second : FoodGroup{}, build))};
   }
   return c.second;
 }
@@ -503,6 +851,49 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     for (auto &slot : recipes[r].in) uses.insert(slot.alts.begin(), slot.alts.end());
     for (int k : uses) used_in[k]++;
   }
+  // containers: what the fluid canner gives back emptying something (an empty cell, can, capsule). a recipe
+  // returning one (a cell of ethylene in, polyethylene and the empty cell out) isn't taking anything apart
+  set<int> containers;
+  for (auto &rc : recipes) {
+    if (types[rc.type] != "gt.recipe.fluidcanner" || rc.in.size() != 1 || rc.out.size() != 2) continue;
+    bool fluid0 = keys[rc.out[0].key].compare(0, 6, "fluid:") == 0, fluid1 = keys[rc.out[1].key].compare(0, 6, "fluid:") == 0;
+    if (fluid0 != fluid1) containers.insert(fluid0 ? rc.out[1].key : rc.out[0].key);
+  }
+  recycling.assign(recipes.size(), false);
+  for (int r = 0; r < (int)recipes.size(); r++) {
+    set<int> outs;
+    for (auto &o : recipes[r].out)
+      if (!containers.count(o.key)) outs.insert(o.key);
+    for (auto &slot : recipes[r].in) {
+      if (slot.count == 0 || recycling[r]) continue;
+      for (size_t i = 0; i < slot.alts.size() && i < 4 && !recycling[r]; i++) {
+        const auto &makers = made_by[slot.alts[i]];
+        for (size_t m = 0; m < makers.size() && m < 64 && !recycling[r]; m++)
+          for (auto &s2 : recipes[makers[m]].in) {
+            if (s2.count == 0) continue;
+            bool hit = false;
+            for (int x : s2.alts) hit |= outs.count(x) > 0;
+            if (hit) {
+              recycling[r] = true;
+              break;
+            }
+          }
+      }
+    }
+  }
+  plannable.assign(recipes.size(), true);
+  for (int r = 0; r < (int)recipes.size(); r++)
+    if (recycling[r] && types[recipes[r].type] != "gt.recipe.fluidcanner") plannable[r] = false;
+  circuit_key.assign(keys.size(), false);
+  if (auto c = name_index.find("gregtech:gt.integrated_circuit"); c != name_index.end())
+    for (int k = 0; k < (int)keys.size(); k++) circuit_key[k] = name_of[k] == c->second;
+  machine_items.assign(types.size(), {});
+  for (auto &[mid, tm] : machine_maps) {
+    auto k = key_index.find("gregtech:gt.blockmachines:" + to_string(mid));
+    if (k == key_index.end() || made_by[k->second].empty()) continue;  // nothing makes it, can't plan building it
+    for (int type : tm.second) machine_items[type].push_back({k->second, tm.first < 0 ? 15 : tm.first, tm.first < 0});
+    if (tm.first < 0) multi_keys.insert(k->second);
+  }
   keys_of_name.assign(name_index.size(), {});
   for (int k = 0; k < (int)keys.size(); k++)
     if (name_of[k] >= 0) keys_of_name[name_of[k]].push_back(k);
@@ -531,18 +922,20 @@ string foods_state_json() {
   set<int> named;
   json &jf = out["foods"] = json::object();
   for (auto &[k, f] : foods) jf[keys[k]] = {{"name", f.name}, {"hunger", f.hunger}, {"saturation", f.saturation}};
-  json &jr = out["recipes"] = json::object();
   json &jg = out["groups"] = json::object();
   for (auto &[name, g] : snapshot.groups) {
-    const Solved &s = *solved(name);
-    json &group = jg[name];
-    json &craftable = group["craftable"] = json::object();
-    json &nodes = group["nodes"] = json::object();
-    set<int> seen;
+    const Solved &s = *solved(name, false);
+    json &craftable = jg[name]["craftable"] = json::object();
     for (auto &[k, f] : foods)
       if (s.dist[k] < INF) {
-        craftable[keys[k]] = s.dist[k];
-        add_tree(s, k, nodes, jr, named, seen);
+        // steps: how many recipes the plan behind "how to make it" has, for one, made the same way
+        json nodes = json::object(), jr = json::object();
+        set<int> plan_named;
+        build_plan(s, &g, k, 1, -1, nodes, jr, plan_named);
+        map<string, int64_t> have;
+        for (auto &[key, n] : nodes.items()) have[key] = held_of(&g, key_index[key]);
+        craftable[keys[k]] = (int)plan_needs(nodes, jr, keys[k], 1, have).order.size();
+        named.insert(k);
       }
   }
   json &jp = out["players"] = json::array();
@@ -578,7 +971,7 @@ string recipes_search_json(const string &query) {
   }
   string q = query;
   for (char &c : q) c = tolower(c);
-  // exact name first, then names starting with it, then containing it; the most used first within each
+  // exact name first, then names starting with it, then containing it, the most used first within each
   vector<tuple<int, int, int>> hits;  // rank, -recipes, key
   for (size_t k = 0; k < keys.size() && !q.empty(); k++) {
     const string &n = search_names[k];
@@ -611,12 +1004,15 @@ string recipes_groups_json() {
   return json{{"groups", g}, {"players", players}}.dump();
 }
 
-string recipes_item_json(const string &key, const string &group, int force) {
+string recipes_item_json(const string &key, const string &group, int force, double qty) {
   lock_guard<mutex> l(state_lock);
   auto f = key_index.find(key);
   if (!loaded || f == key_index.end()) return "{\"error\":\"unknown item\"}";
   int k = f->second;
-  shared_ptr<Solved> s = solved(group);
+  // what can be made with the machines the group has comes first (the same plan the food planner counts), only
+  // when there's no way does the plan build machines
+  shared_ptr<Solved> now = solved(group, false), build = solved(group, true);
+  shared_ptr<Solved> s = now->dist[k] < INF ? now : build;
   set<int> named{k};
   json out;
   out["key"] = key;
@@ -630,11 +1026,13 @@ string recipes_item_json(const string &key, const string &group, int force) {
     for (auto &slot : rc.in) {
       if (slot.alts.empty()) continue;
       int b = INF;
-      for (int a : slot.alts) b = min(b, cost_of(*s, a));
+      for (int a : slot.alts)
+        if (usable(*build, slot, a)) b = min(b, cost_of(*build, a));
       worst = max(worst, b);
     }
-    bool ok = machine_ok(*s, rc) && worst < INF;
-    order.emplace_back(ok ? 0 : machine_ok(*s, rc) ? 1 : 2, worst, rc.eut, r);
+    bool ok = machine_ok(*build, rc) && worst < INF;
+    // real recipes before ones taking something apart
+    order.emplace_back((ok ? 0 : machine_ok(*build, rc) ? 1 : 2) * 2 + recycling[r], worst, rc.eut, r);
   }
   sort(order.begin(), order.end());
   json producers = json::array();
@@ -645,18 +1043,25 @@ string recipes_item_json(const string &key, const string &group, int force) {
     for (auto &slot : recipes[r].in) {
       json alts = json::array();
       for (size_t a = 0; a < slot.alts.size() && a < 12; a++) {
-        int ak = slot.alts[a], d = cost_of(*s, ak);
+        int ak = slot.alts[a], d = cost_of(*build, ak);
         alts.push_back({keys[ak], d >= INF ? json(nullptr) : json(d)});
         named.insert(ak);
       }
       slots.push_back({{"count", slot.count}, {"alts", alts}, {"more", (int)slot.alts.size() - (int)alts.size()}});
     }
     rj["slots"] = slots;
-    rj["state"] = state == 0 ? "ready" : state == 1 ? "missing ingredients" : "no machine";
+    rj["state"] = state / 2 == 0 ? "ready" : state / 2 == 1 ? "missing ingredients" : "no machine";
+    if (!owns(*build, recipes[r])) {
+      int m = machine_to_build(*build, recipes[r]);
+      if (m >= 0) {
+        rj["build"] = keys[m];
+        named.insert(m);
+      }
+    }
     rj["steps"] = worst >= INF ? json(nullptr) : json(worst + 1);
     rj["id"] = r;
     // what one of it uses up of the group's holdings going this way, all the way down
-    double per = made_per_run(recipes[r], k), c = state == 0 && per > 0 ? run_cost(*s, recipes[r]) / per : INFINITY;
+    double per = made_per_run(recipes[r], k), c = state / 2 == 0 && per > 0 ? run_cost(*build, recipes[r]) / per : INFINITY;
     rj["cost"] = c == INFINITY ? json(nullptr) : json(c);
     producers.push_back(rj);
   }
@@ -669,24 +1074,32 @@ string recipes_item_json(const string &key, const string &group, int force) {
     forced = true;
   json nodes = json::object(), jr = json::object();
   set<int> seen;
-  add_tree(*s, k, nodes, jr, named, seen, forced ? force : -1);
+  auto gi = snapshot.groups.find(group);
+  const FoodGroup *gp = gi != snapshot.groups.end() ? &gi->second : nullptr;
+  if (qty <= 0) qty = wild[k] || key.compare(0, 6, "fluid:") != 0 ? 1 : 1000;
+  build_plan(*s, gp, k, qty, forced ? force : -1, nodes, jr, named);
+  out["qty"] = qty;
   out["route"] = {{"nodes", nodes}, {"recipes", jr}};
+  if (s->dist[k] >= INF) {
+    set<int> stack;
+    json b = blockers(*s, k, 5, stack);
+    // name everything in it, and the recipes it names
+    function<void(const json &)> walk = [&](const json &x) {
+      named.insert(key_index[x["key"].get<string>()]);
+      if (x.contains("recipe") && !jr.contains(to_string(x["recipe"].get<int>()))) jr[to_string(x["recipe"].get<int>())] = recipe_json(x["recipe"].get<int>(), named);
+      if (x.contains("missing"))
+        for (auto &m : x["missing"]) walk(m);
+    };
+    walk(b);
+    out["route"]["recipes"] = jr;
+    out["blockers"] = b;
+  }
   if (forced) out["route"]["forced"] = force;
   out["route"]["cost"] = s->cost[k] == INFINITY ? json(nullptr) : json(s->cost[k]);
   // how much of each thing the route starts from the group has ("any damage": all damages together)
   json have = json::object();
-  if (auto g = snapshot.groups.find(group); g != snapshot.groups.end())
-    for (auto &[key, node] : nodes.items()) {
-      if (node.size() != 1 || node[0].is_null() || node[0].get<int>() != 0) continue;
-      int64_t n = 0;
-      int kk = key_index[key];
-      if (wild[kk]) {
-        string prefix = key.substr(0, key.rfind(':') + 1);
-        for (auto it = g->second.held.lower_bound(prefix); it != g->second.held.end() && it->first.compare(0, prefix.size(), prefix) == 0; ++it)
-          n += it->second;
-      } else if (auto h = g->second.held.find(key); h != g->second.held.end()) n = h->second;
-      have[key] = n;
-    }
+  for (auto &[key, node] : nodes.items())
+    if (int64_t n = held_of(gp, key_index[key]); n > 0 || (node.size() == 1 && !node[0].is_null())) have[key] = n;
   out["have"] = have;
   json &jn = out["names"] = json::object();
   for (int n : named) jn[keys[n]] = display(n);

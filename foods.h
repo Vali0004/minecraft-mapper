@@ -45,7 +45,8 @@ extern const char foods_html[];
 std::string recipes_search_json(const std::string &query);
 std::string recipes_groups_json();
 // force: a recipe id to route through instead of the thriftiest, -1 for none
-std::string recipes_item_json(const std::string &key, const std::string &group, int force = -1);
+// qty: how much to plan for (items, or mB of a fluid), 0 for one item or 1000 mB
+std::string recipes_item_json(const std::string &key, const std::string &group, int force = -1, double qty = 0);
 extern const char recipes_html[];
 // texture-dump's item_icons.png, empty without one
 const std::string &recipes_icons_png();

@@ -1707,7 +1707,8 @@ int main(int argc, char **argv) {
       r.ctype = "application/json";
       r.body = target == "/recipes/search.json" ? recipes_search_json(param("q"))
              : target == "/recipes/groups.json" ? recipes_groups_json()
-             : recipes_item_json(param("key"), param("group"), param("recipe").empty() ? -1 : atoi(param("recipe").c_str()));
+             : recipes_item_json(param("key"), param("group"), param("recipe").empty() ? -1 : atoi(param("recipe").c_str()),
+                                 param("qty").empty() ? 0 : atof(param("qty").c_str()));
       return true;
     }
     if (target == "/foods/state.json") {
