@@ -263,6 +263,7 @@ double run_setup(const Solved &s, const Recipe &rc) {
     if (int m = machine_to_build(s, rc); m >= 0 && s.dist[m] != 0) su += (s.cost[m] + s.setup[m]) * (is_multi(m) ? MULTIBLOCK : 1);
   return su;
 }
+bool gt_key(int k) { return keys[k].compare(0, 9, "gregtech:") == 0; }
 int steps_of(const Solved &s, int alt) { return wild[alt] ? s.steps_any[name_of[alt]] : s.steps[alt]; }
 // how many steps a route through rc takes: one, plus what each input takes (from the alternative run_cost picks),
 // plus building its machine. added up, a plan's effort is all of its steps, not its longest branch (something
@@ -576,7 +577,10 @@ struct TreeBuild {
           return total(raw_of(s, a), held ? 0 : setup_of(s, a), held ? 0 : steps_of(s, a), wild[a] ? 64 : typical(a));
         };
         double sx = sc(x), sy = sc(y);
-        return sx < sy || (sx == sy && cost_of(s, x) < cost_of(s, y));
+        if (fabs(sx - sy) > 1e-9 * max(1.0, fabs(sx))) return sx < sy;
+        if (cost_of(s, x) != cost_of(s, y)) return cost_of(s, x) < cost_of(s, y);
+        // equal: GregTech's (GTNH unifies to it: a lead casing is GregTech's, IC2's is a leftover placeholder)
+        return gt_key(x) && !gt_key(y);
       });
     else
       stable_sort(a.begin(), a.end(), [&](int x, int y) { return cost_of(s, x) < cost_of(s, y); });
