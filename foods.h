@@ -36,6 +36,9 @@ using FoodNamer = std::function<std::string(const std::string &key)>;
 
 bool foods_load(const std::filesystem::path &dump_dir, FoodNamer namer);
 bool foods_loaded();
+// where things come from besides recipes: per item key, its loot bags and quest rewards ("loot bag: Tier 1 LV",
+// "quest: Something From Nothing")
+void foods_set_sources(std::map<std::string, std::vector<std::string>> sources);
 size_t foods_total();
 // called by every container scrape, the solve runs only when the page asks
 void foods_update(FoodSnapshot s);

@@ -54,6 +54,7 @@ vector<Recipe> recipes;
 map<int, Food> foods;  // key -> food
 map<int, pair<int, vector<int>>> machine_maps;  // GT mID -> (tier, recipe map types), tier -1 for multiblocks
 FoodNamer namer;
+map<string, vector<string>> sources;  // item key -> loot bags and quests that give it
 map<string, string> fluid_names;  // texture-dump's fluids.json
 map<string, string> machine_names;  // texture-dump's recipe_maps.json: GT recipe map -> its name in game
 unordered_map<string, int> icon_of;  // texture-dump's item_icons.json: key -> cell in item_icons.png
@@ -171,6 +172,8 @@ struct Solved {
   // per key: what one held unit is worth (0 for what isn't held). a held thing that can be made is worth what
   // making another would cost, so a route doesn't use up something valuable (recycle a held machine for its dust)
   vector<double> value;
+  // per key: held, and the group can make more of it (a recipe that doesn't take something apart)
+  vector<bool> replaceable;
   // per key: how many recipe steps its thriftiest route takes (0 when held), per item the fewest over damages
   vector<int> steps, steps_any;
   // per key: what its thriftiest route costs once, however much is made (machines to build, tools to make)
@@ -440,6 +443,7 @@ Solved solve(const FoodGroup &g, bool build) {
   // then what held things that can be made are worth: what making one more costs from the rest (never less than
   // plain), or PRECIOUS when it can't be made now (use it if needed, but not to save a little elsewhere)
   vector<double> value = s.value;
+  s.replaceable.assign(keys.size(), false);
   for (int k = 0; k < (int)keys.size(); k++) {
     if (s.dist[k] != 0 || value[k] == 0 || made_by[k].empty()) continue;
     double best = INFINITY;
@@ -450,6 +454,7 @@ Solved solve(const FoodGroup &g, bool build) {
       if (per > 0 && c < INFINITY) best = min(best, c / per);
     }
     value[k] = best == INFINITY ? PRECIOUS * base(k) : max(base(k), best);
+    s.replaceable[k] = best < INFINITY;
   }
   s.value = value;
   relax();
@@ -1036,6 +1041,11 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
 }
 
 bool foods_loaded() { return loaded; }
+
+void foods_set_sources(map<string, vector<string>> s) {
+  lock_guard<mutex> l(state_lock);
+  sources = move(s);
+}
 size_t foods_total() { return foods.size(); }
 
 void foods_update(FoodSnapshot s) {
@@ -1247,6 +1257,18 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   if (gp)
     for (auto &f : gp->free_fluids) free.push_back("fluid:" + f);
   out["free"] = free;
+  // held things the plan starts from: can the group make more, and where else they come from
+  json from = json::object(), replace = json::object();
+  for (auto &[key2, node] : nodes.items()) {
+    if (node.size() != 1 || node[0].is_null() || node[0].get<int>() != 0) continue;
+    int kk = key_index[key2];
+    if (circuit_key[kk] || s->free[kk]) continue;
+    replace[key2] = (bool)s->replaceable[kk];
+    string lookup = wild[kk] ? key2.substr(0, key2.rfind(':')) + ":0" : key2;
+    if (auto f2 = sources.find(lookup); f2 != sources.end()) from[key2] = f2->second;
+  }
+  out["sources"] = from;
+  out["replaceable"] = replace;
   json &jn = out["names"] = json::object();
   for (int n : named) jn[keys[n]] = display(n);
   out["icons"] = icons_json(named);

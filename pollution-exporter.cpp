@@ -1561,6 +1561,85 @@ static void load_dump(const path &dir) {
          item_names.size(), gt_machine_names.size(), coke_recipes.size(), dir.c_str());
 }
 
+// where items come from besides recipes, for the recipe pages: EnhancedLootBags' bags (config/EnhancedLootBags/
+// LootBags.xml, next to the world) and BetterQuesting's quest rewards (World/betterquesting/QuestDatabase.json)
+static map<string, vector<string>> load_sources(const path &world) {
+  map<string, vector<string>> out;
+  auto add = [&](string key, const string &what) {
+    // "mod:name" is damage 0
+    size_t c = key.rfind(':');
+    if (c == string::npos || key.find(':') == c || key.find_first_not_of("0123456789", c + 1) != string::npos) key += ":0";
+    auto &v = out[key];
+    if (find(v.begin(), v.end(), what) == v.end() && v.size() < 6) v.push_back(what);
+  };
+  // "dreamcraft.lootbag.group.tier_1_lv" -> "Tier 1 LV"
+  auto bag_name = [](string g) {
+    if (size_t d = g.rfind('.'); d != string::npos) g = g.substr(d + 1);
+    for (size_t i = 0; i < g.size(); i++) {
+      if (g[i] == '_') g[i] = ' ';
+      if (i == 0 || g[i - 1] == ' ') g[i] = toupper(g[i]);
+    }
+    for (const char *t : {" Lv", " Mv", " Hv", " Ev", " Iv", " Luv", " Zpm", " Uv", " Uhv", " Ae"})
+      if (g.size() >= strlen(t) && g.compare(g.size() - strlen(t), string::npos, t) == 0)
+        for (size_t i = g.size() - strlen(t) + 1; i < g.size(); i++) g[i] = toupper(g[i]);
+    return g;
+  };
+  path bags = world.parent_path() / "config" / "EnhancedLootBags" / "LootBags.xml";
+  if (exists(bags)) {
+    string xml = readFile(bags), group;
+    auto attr = [](const string &tag, const char *name) {
+      string k = string(" ") + name + "=\"";
+      size_t a = tag.find(k);
+      if (a == string::npos) return string();
+      a += k.size();
+      return tag.substr(a, tag.find('"', a) - a);
+    };
+    for (size_t at = 0; (at = xml.find('<', at)) != string::npos; at++) {
+      size_t end = xml.find('>', at);
+      if (end == string::npos) break;
+      string tag = xml.substr(at, end - at);
+      if (tag.compare(0, 10, "<LootGroup") == 0) group = bag_name(attr(tag, "GroupName"));
+      else if (tag.compare(0, 5, "<Loot") == 0 && tag.compare(0, 10, "<LootGroups") != 0 && !group.empty())
+        if (string item = attr(tag, "ItemName"); !item.empty()) add(item, "loot bag: " + group);
+    }
+  }
+  path quests = world / "betterquesting" / "QuestDatabase.json";
+  if (exists(quests)) {
+    try {
+      json db = json::parse(readFile(quests));
+      // keep the copy alive, items() only refers into it
+      const json all = db.value("questDatabase:9", json::object());
+      for (auto &[id, q] : all.items()) {
+        string name;
+        if (auto p = q.find("properties:10"); p != q.end())
+          if (auto b = p->find("betterquesting:10"); b != p->end()) name = b->value("name:8", "");
+        // without its colour codes ("§c§lIndustrial Water Purification")
+        string clean;
+        for (size_t i = 0; i < name.size(); i++) {
+          if ((unsigned char)name[i] == 0xc2 && i + 1 < name.size() && (unsigned char)name[i + 1] == 0xa7) { i += 2; continue; }
+          clean += name[i];
+        }
+        function<void(const json &)> walk = [&](const json &j) {
+          if (j.is_object()) {
+            if (j.contains("id:8") && j["id:8"].is_string() && j.contains("Damage:2"))
+              add(j["id:8"].get<string>() + ":" + to_string(j["Damage:2"].get<int>()), "quest: " + clean);
+            for (auto &[k, v] : j.items()) walk(v);
+          }
+        };
+        if (auto r = q.find("rewards:9"); r != q.end())
+          for (auto &[rk, rw] : r->items()) {
+            string kind = rw.value("rewardID:8", "");
+            if (kind == "bq_standard:item" || kind == "bq_standard:choice") walk(rw);
+          }
+      }
+    } catch (const exception &e) {
+      fprintf(stderr, "failed to read %s: %s\n", quests.c_str(), e.what());
+    }
+  }
+  printf("loaded where %zu items come from (loot bags, quest rewards)\n", out.size());
+  return out;
+}
+
 static void usage(const char *argv0) {
   printf("usage: %s -p <save path> [-l [addr:]port] [-o <textfile.prom>] [-n <items.json>] [-d <texture-dump dir>]\n"
          "  -n  texture-dump's items.json, gives container_items real names (\"Iron Ingot\")\n"
@@ -1625,6 +1704,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   const path save{savepath};
+  if (foods_loaded()) foods_set_sources(load_sources(save));
   // the textfile, like the original exporter wrote for node_exporter's textfile collector
   auto write_textfile = [save, prom_out]() {
     const string tmp = string(prom_out) + ".tmp";

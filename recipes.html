@@ -431,6 +431,19 @@ function howTo(r, key, qty) {
       if (have !== undefined) ct.append(" · ", el("span", have >= want ? "ok" : "short", have >= want ? `have ${amount(k, have)}` : `have ${amount(k, have)}, short ${amount(k, want - have)}`));
     }
     t.append(ct);
+    // where it comes from: can the team make more, and the loot bags and quests that give it
+    const src = (r.sources || {})[k] || [];
+    if (r.replaceable && k in r.replaceable) {
+      const o = el("div", "ct");
+      if (!r.replaceable[k]) o.append(el("span", "short", "you can't make more of this yet"));
+      else o.append(el("span", "muted", "you can make more"));
+      if (src.length) {
+        const sp = el("span", "muted", ` · from ${src.slice(0, 2).join(", ")}${src.length > 2 ? ` and ${src.length - 2} more` : ""}`);
+        sp.title = src.join("\n");
+        o.append(sp);
+      }
+      t.append(o);
+    }
     row.append(slot(k, 0), t);
     grid.append(row);
   }
@@ -440,6 +453,20 @@ function howTo(r, key, qty) {
   for (const f of r.free || []) if (p.leaves.includes(f)) freeNotes.push(`${name(f)} from your boilers.`);
   if (freeNotes.length) needCard.append(el("div", "muted", freeNotes.join(" ")));
   parts.push(needCard);
+
+  // stock that can't be made again: say the plan uses it up
+  const spent = p.leaves.filter(k => r.replaceable?.[k] === false && !p.tools.has(k) && !p.machines.has(k));
+  if (spent.length) {
+    const n = el("div", "card hint");
+    n.append("This uses up things you can't make more of yet: ");
+    spent.forEach((k, i) => {
+      if (i) n.append(", ");
+      const src = (r.sources || {})[k] || [];
+      n.append(itemLink(k), ` (${amount(k, p.need.get(k))} of ${amount(k, r.have[k] ?? 0)}${src.length ? ", from " + src[0] + (src.length > 1 ? " and more" : "") : ""})`);
+    });
+    n.append(".");
+    parts.push(n);
+  }
 
   // routed through a recipe picked below: say so, and how to go back
   if (route.forced != null) {
