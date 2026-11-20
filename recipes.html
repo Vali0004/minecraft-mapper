@@ -71,7 +71,12 @@ input.qty { width: 110px; padding: 6px 10px; }
 .step .what { font-weight: 600; }
 .step .how { color: var(--muted); font-size: 13px; }
 .chip { border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; background: var(--held-soft); color: var(--held); }
-.chip.circuit { background: var(--accent-soft); color: var(--accent); }
+.chip.pick { background: var(--accent-soft); color: var(--accent); }
+.chip.circuit { background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; font-weight: 600; }
+.chip.circuit .icon { margin-right: 3px; }
+/* the machine's circuit slot, apart from the inputs like GregTech's screen has it */
+.slot.circuitslot { outline: 2px dashed var(--held); outline-offset: -2px; margin-left: 4px; }
+.slot.circuitslot .n { font-size: 13px; }
 
 /* a recipe drawn like the game: slots, an arrow, the result */
 .recipe { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
@@ -191,6 +196,22 @@ function icon(k, cls = "") {
   return s;
 }
 
+// a GregTech programmed circuit: its picture with its number, like the machine's circuit slot
+function circuitSlot(k) {
+  const s = el("div", "slot circuitslot");
+  s.title = `Programmed Circuit ${circuitOf(k)}: set it in the machine's circuit slot, it isn't used up`;
+  s.append(icon(k));
+  // GregTech's pictures show the number, one without its own picture (circuit 0's stands in) gets it written on
+  if (icons.cells[k] === icons.cells["gregtech:gt.integrated_circuit:0"] && circuitOf(k) !== 0) s.append(el("span", "n", circuitOf(k)));
+  return s;
+}
+function circuitChip(k) {
+  const c = el("span", "chip circuit");
+  c.title = `Programmed Circuit ${circuitOf(k)}, set in the machine`;
+  c.append(icon(k, "xs"), `${circuitOf(k)}`);
+  return c;
+}
+
 // an item named in text: its small picture and name, clicking opens it
 function itemLink(k) {
   const b = el("button", "ilink");
@@ -234,6 +255,8 @@ function drawRecipe(r, ins, scale = 1) {
     if (items.children.length) col.append(items);
     if (fluids.children.length) col.append(fluids);
     wrap.append(col);
+    // the machine's circuit slot, set from its screen, drawn the way GregTech does: the circuit and its number
+    if (circuit) wrap.append(circuitSlot(circuit[0]));
   }
   wrap.append(el("span", "arrow", "→"));
   const out = el("div", "row out");
@@ -368,7 +391,9 @@ function howTo(r, key, qty) {
   }
   const p = plan(route, key, qty, r.have || {});
   if (root[0] === 0 && !p.order.length) {
-    parts.push(el("p", "muted", `${groupName} already has ${amount(key, r.have[key] ?? 0)}.`));
+    const held = r.have[key] ?? 0;
+    const why = key === "fluid:water" ? "Water comes from any source" : (r.free || []).includes(key) ? `${groupName}'s boilers make it` : null;
+    parts.push(el("p", "muted", why ? `${why}${held ? `, and there's ${amount(key, held)} in its tanks` : ""}.` : `${groupName} already has ${amount(key, held)}.`));
     return parts;
   }
   // machines to build first
@@ -427,8 +452,8 @@ function howTo(r, key, qty) {
     const how = [machine(rc)];
     if (power(rc)) how.push(power(rc));
     head.append(el("span", "how", how.join(" · ")));
-    const circ = uses.map(circuitOf).find(c => c !== null);
-    if (circ !== undefined && circ !== null) head.append(el("span", "chip circuit", `circuit ${circ}`));
+    const circ = uses.find(u => circuitOf(u) !== null);
+    if (circ) head.append(circuitChip(circ));
     if (times > 1) head.append(el("span", "chip", `do it ${times}×`));
     const m = p.extra(k).machine;
     if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
@@ -470,14 +495,14 @@ function altCard(p, key, best) {
   if (p.recycling) h.append(el("span", "chip recycle", "takes something apart"));
   const y = p.yield;
   h.append(el("span", "yield", `${amount(key, y.per)} per run` + (y.ratio !== null ? ` · ${fmt(y.ratio * 100)}% of ${isFluid(key) ? "fluid" : "items"} in` : "")));
-  const circ = p.slots.map(s => s.alts.length ? circuitOf(s.alts[0][0]) : null).find(x => x !== null);
-  if (circ !== undefined && circ !== null) h.append(el("span", "chip circuit", `circuit ${circ}`));
+  const circ = p.slots.map(s => s.alts.length ? s.alts[0][0] : null).find(k => circuitOf(k) !== null);
+  if (circ) h.append(circuitChip(circ));
   // the whole route through it, against the thriftiest
   if (p.cost != null && best) {
     const x = p.cost / best;
     // scoring better than the plan's pick: it was passed over, something along it would run short
     if (x < 0.995 && forced == null) h.append(el("span", "chip", "cheaper, but you'd run short of something on the way"));
-    else h.append(el("span", "chip" + (x < 1.005 ? " circuit" : ""), x < 1.005 ? (forced === p.id ? "your pick" : "the plan's pick") : `route costs ${fmt(x)}× as much`));
+    else h.append(el("span", "chip" + (x < 1.005 ? " pick" : ""), x < 1.005 ? (forced === p.id ? "your pick" : "the plan's pick") : `route costs ${fmt(x)}× as much`));
   }
   if (p.cost != null) {
     const b = el("button", "use", forced === p.id ? "planning with this" : "plan with this");

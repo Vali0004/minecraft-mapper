@@ -175,6 +175,13 @@ public class TextureDump {
       // GregTech and Bartworks meta items name every material x prefix, but the creative menu only lists some
       // (crushed ore of a material GT hides there, for one). ask for every damage value, a name comes from the
       // material and prefix, an invalid one is empty, an untranslated key, or for Bartworks a "_NULL" material
+      // a programmed circuit's configurations each have their own picture, the creative menu only lists the first
+      if (name.equals("gregtech:gt.integrated_circuit")) {
+        try {
+          java.lang.reflect.Constructor<?> make = stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class);
+          for (int dmg = 1; dmg <= 24; dmg++) stacks.add(make.newInstance(item, 1, dmg));
+        } catch (Throwable t) {}
+      }
       if (name.startsWith("gregtech:gt.metaitem.") || name.startsWith("bartworks:gt.bwMetaGenerated")) {
         try {
           java.lang.reflect.Constructor<?> make = stackClass.getConstructor(Class.forName("net.minecraft.item.Item"), int.class, int.class);

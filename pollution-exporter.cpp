@@ -1399,6 +1399,10 @@ void collect_containers(const path savepath, string &out) {
         for (auto &[k, c] : its)
           if (string s = key(k); !s.empty()) fs.groups[tk.first].held[s] += c;
       for (auto &[team, dim, m] : machines) fs.groups[team].machines.push_back(m.id);
+      // fluid in tanks and machines (not pipes, that's on its way somewhere), in mB like the recipes count it
+      for (auto &[tk, m] : fluids)
+        for (auto &[fk, mb] : m)
+          if (mb > 0 && fk.second.find("Pipe") == string::npos) fs.groups[tk.first].held["fluid:" + fk.first] += mb;
       // a boiler (Railcraft's or GregTech's) makes steam, no recipe says so
       for (auto &[team, dim, b] : boilers) fs.groups[team].free_fluids.insert("steam");
       for (auto &[team, dim, b] : gt) fs.groups[team].free_fluids.insert("steam");

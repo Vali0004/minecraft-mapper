@@ -60,13 +60,18 @@ unordered_map<string, int> icon_of;  // texture-dump's item_icons.json: key -> c
 int icon_size = 16, icon_columns = 0;
 string icons_png;
 
+// per key: a GregTech programmed circuit. free as a machine's setting (a slot that isn't used up), but a recipe
+// that uses one up needs a real one
+vector<bool> circuit_key;
+
 // the icons of the keys a response names, and where they are in the sheet
 json icons_json(const set<int> &named) {
   json icons = json::object();
   for (int k : named) {
     auto f = icon_of.find(keys[k]);
     // "any damage": the plain damage 0 picture
-    if (f == icon_of.end() && wild[k]) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
+    // "any damage", or a circuit configuration without its own picture: the plain damage 0 one
+    if (f == icon_of.end() && (wild[k] || circuit_key[k])) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
     if (f != icon_of.end()) icons[keys[k]] = f->second;
   }
   return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}};
@@ -81,9 +86,6 @@ vector<bool> recycling;
 // per recipe: a plan may use it. not one taking something apart (macerating a machine, melting down parts: it
 // destroys what was made), except emptying a container (a cell, can, capsule in the fluid canner)
 vector<bool> plannable;
-// per key: a GregTech programmed circuit. free as a machine's setting (a slot that isn't used up), but a recipe
-// that uses one up needs a real one
-vector<bool> circuit_key;
 // per recipe type: the GT machines that run it, as items (key, tier, multiblock), so a plan can build one
 struct MachineItem { int key, tier; bool multi; };
 vector<vector<MachineItem>> machine_items;
