@@ -1540,15 +1540,19 @@ struct MissingPlan {
         if (depth > 0 && tier > horizon) { beyond = min(beyond, tier); continue; }
         choices.push_back(r);
       }
-      stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
-        int ra = recipe_rank(a, k), rb = recipe_rank(b, k);
+      struct RankedRecipe { int recipe, rank, score; };
+      vector<RankedRecipe> ranked;
+      ranked.reserve(choices.size());
+      for (int r : choices) {
+        int rank = recipe_rank(r, k);
         missing.stack = stack;
-        int ca = missing.recipe(a, 3);
-        missing.stack = stack;
-        int cb = missing.recipe(b, 3);
-        if (ra + 15 * ca != rb + 15 * cb) return ra + 15 * ca < rb + 15 * cb;
-        return ra < rb;
+        ranked.push_back({r, rank, rank + 15 * missing.recipe(r, 3)});
+      }
+      stable_sort(ranked.begin(), ranked.end(), [](const RankedRecipe &a, const RankedRecipe &b) {
+        return a.score != b.score ? a.score < b.score : a.rank < b.rank;
       });
+      choices.clear();
+      for (const auto &candidate : ranked) choices.push_back(candidate.recipe);
       if (choices.size() > 40) choices.resize(40);
       for (int r : choices) {
         size_t mark = added.size();
