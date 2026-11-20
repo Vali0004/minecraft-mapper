@@ -435,6 +435,7 @@ struct ChunkContainers {
   map<ItemKey, int64_t> items;
   map<string, int64_t> tiles;  // tile entity id -> how many held items
   map<pair<string, string>, int64_t> fluids;  // (fluid, tile entity id) -> mB
+  map<string, int64_t> item_fluids;  // fluid in stored items' GT.FluidContent tags
   vector<Boiler> boilers;
   vector<GtBoiler> gt_boilers;
   vector<GtMachine> gt_machines;
@@ -753,6 +754,15 @@ static void scan_region(const path &p, RegionContainers &r, const map<int, strin
       const string type = te.id.empty() ? "unknown" : te.id;
       for (auto &[where, f] : te.fluids) {
         if (f.name.empty() || f.amount <= 0) continue;
+        static const string cell_tag = "/tag/GT.FluidContent";
+        if (where.ends_with(cell_tag)) {
+          string stack = where.substr(0, where.size() - cell_tag.size());
+          auto st = te.stacks.find(stack);
+          int64_t count = st != te.stacks.end() ? st->second.count : 0;
+          if (auto nested = te.nested.find(stack); nested != te.nested.end()) count = nested->second.count;
+          if (count > 0) r.chunks[i].item_fluids[f.name] += f.amount * count;
+          continue;  // this is inside an item, not a tile entity's own tank
+        }
         r.chunks[i].fluids[{f.name, type}] += f.amount;
         any = true;
       }
@@ -1010,6 +1020,7 @@ struct ItemWalk {
   set<string> seen;
   // called for each stack with the holder it's in, returns the holder name for what that stack holds itself
   function<string(int id, int damage, int64_t count, const string &holder)> on_stack;
+  function<void(const string &fluid, int64_t mb)> on_fluid;
   map<string, int64_t> backpack_bytes = {};  // UID -> its file's NBT size, what opening it sends
 
   int stack_id(const NbtTag &st) const {
@@ -1034,7 +1045,15 @@ struct ItemWalk {
       int64_t count = (int64_t)t.num("Count");
       if (id <= 0 || count <= 0) return;
       string inner = on_stack(id, (int)t.num("Damage"), count, holder);
-      if (const NbtTag *tag = t.get("tag")) walk(*tag, inner, depth + 1);
+      if (const NbtTag *tag = t.get("tag")) {
+        if (const NbtTag *fluid = tag->get("GT.FluidContent")) {
+          const NbtTag *name = fluid->get("FluidName");
+          int64_t amount = (int64_t)fluid->num("Amount");
+          if (on_fluid && name && name->type == 8 && !name->s.empty() && amount > 0)
+            on_fluid(name->s, amount * count);
+        }
+        walk(*tag, inner, depth + 1);
+      }
       return;
     }
     if (const NbtTag *uid = t.get("backpack-UID"); uid && uid->type == 8 && uid->s.find('/') == string::npos && seen.insert(uid->s).second) {
@@ -1084,6 +1103,7 @@ void collect_containers(const path savepath, string &out) {
   map<pair<string, int>, map<ItemKey, int64_t>> items;
   map<pair<string, int>, map<string, int64_t>> tiles;
   map<pair<string, int>, map<pair<string, string>, int64_t>> fluids;
+  map<pair<string, int>, map<string, int64_t>> item_fluids;
   vector<tuple<string, int, Boiler>> boilers;
   vector<tuple<string, int, GtBoiler>> gt;
   vector<tuple<string, int, GtMachine>> machines;
@@ -1133,6 +1153,7 @@ void collect_containers(const path savepath, string &out) {
         for (auto &[k, v] : chunk.items) items[key][k] += v;
         for (auto &[k, v] : chunk.tiles) tiles[key][k] += v;
         for (auto &[k, v] : chunk.fluids) fluids[key][k] += v;
+        for (auto &[fluid, mb] : chunk.item_fluids) item_fluids[key][fluid] += mb;
         for (auto &b : chunk.boilers) boilers.emplace_back(key.first, dimension, b);
         for (auto &b : chunk.gt_boilers) gt.emplace_back(key.first, dimension, b);
         for (auto &m : chunk.gt_machines) machines.emplace_back(key.first, dimension, m);
@@ -1147,7 +1168,7 @@ void collect_containers(const path savepath, string &out) {
           ItemWalk w{savepath, id_of, {}, [&](int id, int damage, int64_t count, const string &) {
             into[{id, damage}] += count;
             return string();
-          }};
+          }, [&](const string &fluid, int64_t mb) { item_fluids[key][fluid] += mb; }};
           w.seen = chest_backpacks_seen;
           for (auto &uid : chunk.backpacks) {
             NbtTag holder;
@@ -1198,6 +1219,11 @@ void collect_containers(const path savepath, string &out) {
     for (auto &[k, mb] : m)
       fmt(out, "container_fluids{team=\"%s\",dim=\"%d\",fluid=\"%s\",type=\"%s\"} %ld\n",
           esc(key.first).c_str(), key.second, esc(k.first).c_str(), esc(k.second).c_str(), mb);
+  out += "# HELP container_item_fluids Fluid in items stored in claimed containers, in mB\n# TYPE container_item_fluids gauge\n";
+  for (auto &[key, m] : item_fluids)
+    for (auto &[fluid, mb] : m)
+      fmt(out, "container_item_fluids{team=\"%s\",dim=\"%d\",fluid=\"%s\"} %ld\n",
+          esc(key.first).c_str(), key.second, esc(fluid).c_str(), mb);
 
   // one series per boiler, there are only ever a handful
   static const struct { const char *name, *help; } boiler_metrics[] = {
@@ -1371,6 +1397,7 @@ void collect_containers(const path savepath, string &out) {
     const auto names = load_usercache(savepath);
     // (team, player, where, container, item) -> count. container is the item holding it (a backpack, /dev/null), "" when carried
     map<tuple<string, string, string, string, ItemKey>, int64_t> held;
+    map<string, map<string, int64_t>> carried_fluids;  // group -> fluid in players' inventory items
     vector<FoodPlayer> food_players;
     map<pair<string, string>, int64_t> inventory_bytes;  // (player, inventory|ender_chest|galacticraft) -> NBT size
     map<string, int64_t> item_max;  // player -> their largest single item's NBT size
@@ -1419,6 +1446,8 @@ void collect_containers(const path savepath, string &out) {
               ItemKey k{id, damage};
               held[{team, n->second, where, holder, k}] += count;
               return item_label(k).first;
+            }, [&](const string &fluid, int64_t mb) {
+              carried_fluids[team.empty() ? "player:" + n->second : team][fluid] += mb;
             }};
             w.seen = player_backpacks_seen;
             w.walk(stack, "", 0);
@@ -1431,6 +1460,10 @@ void collect_containers(const path savepath, string &out) {
         }
       }
     }
+    out += "# HELP player_item_fluids Fluid in players' inventory items, in mB\n# TYPE player_item_fluids gauge\n";
+    for (auto &[group, m] : carried_fluids)
+      for (auto &[fluid, mb] : m)
+        fmt(out, "player_item_fluids{group=\"%s\",fluid=\"%s\"} %ld\n", esc(group).c_str(), esc(fluid).c_str(), mb);
     // the food planner's snapshot: per team its claimed containers, members' items and machines
     if (foods_loaded()) {
       FoodSnapshot fs;
@@ -1446,6 +1479,10 @@ void collect_containers(const path savepath, string &out) {
       for (auto &[tk, m] : fluids)
         for (auto &[fk, mb] : m)
           if (mb > 0 && fk.second.find("Pipe") == string::npos) fs.groups[tk.first].held["fluid:" + fk.first] += mb;
+      for (auto &[tk, m] : item_fluids)
+        for (auto &[fluid, mb] : m) fs.groups[tk.first].held["fluid:" + fluid] += mb;
+      for (auto &[group, m] : carried_fluids)
+        for (auto &[fluid, mb] : m) fs.groups[group].held["fluid:" + fluid] += mb;
       // Logistics Pipes crafting modules: what the team's network makes by itself
       for (auto &[team, lc] : lp_crafts) {
         string out = key(lc.out);
