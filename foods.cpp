@@ -194,9 +194,10 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 // no cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires isn't
 // better than 1 ingot to 2 wires), steps are what count
 const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0, PRECIOUS = 16;
-// what a route is scored by: what it uses up, made worse by how many steps it takes (each step 3%), so using
-// something held beats a long way to an equivalent, and a much longer route has to save a lot to win
-const double STEP = 0.03;
+// what a route is scored by: what it uses up, made worse by how many steps it takes (each step 10%: another
+// machine to load and wait on), so using something held beats a long way to an equivalent, and a longer route has
+// to save real material to win (crushed galena straight into the furnace beats crushing ore into nuggets)
+const double STEP = 0.10;
 double score(double cost, int steps) { return cost * (1 + STEP * steps); }
 
 bool owns(const Solved &s, const Recipe &rc) {
@@ -446,8 +447,26 @@ Solved solve(const FoodGroup &g, bool build) {
   for (int k = 0; k < (int)keys.size(); k++)
     if (s.dist[k] == 0) s.value[k] = base(k);
   relax();
-  // then what held things that can be made are worth: what making one more costs from the rest (never less than
-  // plain), or PRECIOUS when it can't be made now (use it if needed, but not to save a little elsewhere)
+  // then what held things that can be made are worth: exactly what making one more costs from the rest (no floor:
+  // 86 lead dust is worth what the ore it came from is, so smelting it beats crushing more ore), or PRECIOUS when
+  // it can't be made now (use it if needed, but not to save a little elsewhere). not counting round trips: a
+  // recipe whose input is got through the thing itself (annealed copper wire, made from annealed copper ingots,
+  // smelted back into one) says nothing about what the thing is worth
+  function<bool(int, int, int)> through = [&](int a, int k, int depth) {
+    if (a == k) return true;
+    if (depth <= 0 || wild[a]) return false;
+    int r = s.cheapest[a];
+    if (r < 0) return false;
+    for (auto &slot : recipes[r].in) {
+      if (slot.count == 0 || slot.alts.empty()) continue;
+      int pick = -1;
+      double b = INFINITY;
+      for (int x : slot.alts)
+        if (usable(s, slot, x) && raw_of(s, x) < b) b = raw_of(s, x), pick = x;
+      if (pick >= 0 && through(pick, k, depth - 1)) return true;
+    }
+    return false;
+  };
   vector<double> value = s.value;
   s.replaceable.assign(keys.size(), false);
   for (int k = 0; k < (int)keys.size(); k++) {
@@ -455,11 +474,21 @@ Solved solve(const FoodGroup &g, bool build) {
     double best = INFINITY;
     for (int r : made_by[k]) {
       const Recipe &rc = recipes[r];
-      if (!can_run(s, rc) || recycling[r]) continue;
+      if (!can_run(s, rc) || !plannable[r]) continue;
+      bool loops = false;
+      for (auto &slot : rc.in) {
+        if (slot.count == 0 || slot.alts.empty() || loops) continue;
+        int pick = -1;
+        double b = INFINITY;
+        for (int x : slot.alts)
+          if (usable(s, slot, x) && raw_of(s, x) < b) b = raw_of(s, x), pick = x;
+        loops = pick >= 0 && through(pick, k, 6);
+      }
+      if (loops) continue;
       double per = made_per_run(rc, k), c = run_cost(s, rc);
       if (per > 0 && c < INFINITY) best = min(best, c / per);
     }
-    value[k] = best == INFINITY ? PRECIOUS * base(k) : max(base(k), best);
+    value[k] = best == INFINITY ? PRECIOUS * base(k) : best;
     s.replaceable[k] = best < INFINITY;
   }
   s.value = value;
@@ -624,7 +653,9 @@ struct TreeBuild {
       put(k, {nullptr});
       return true;
     }
-    if (d == 0 && force < 0 && !make && scarce && scarce->count(k)) return false;
+    // avoided: held but too little and no way to make more, or topped up in a plan that's trying without it.
+    // neither the held ones nor made ones (the plan's own target excepted)
+    if (scarce && scarce->count(k) && k != root) return false;
     if (d == 0 && force < 0 && !make) {
       put(k, {0});
       return true;
@@ -801,31 +832,66 @@ set<int> short_of(const FoodGroup *g, int k, double qty, const json &nodes, cons
 
 // the plan for qty of k: the thriftiest tree, short things made where they can be, and where they can't, planned
 // around (each round marks what's still short as scarce and plans again, keeping the last plan that worked)
+// what a whole plan costs: everything it uses up of what's held (at what each is worth), made worse by its steps
+double plan_total(const Solved &s, const FoodGroup *g, int k, double qty, const json &nodes, const json &jr) {
+  map<string, int64_t> have;
+  for (auto &[key, n] : nodes.items()) have[key] = held_of(g, key_index[key]);
+  Needs p = plan_needs(nodes, jr, keys[k], qty, have);
+  double used = 0;
+  for (auto &[key, want] : p.need) {
+    auto n = nodes.find(key);
+    if (n == nodes.end() || p.tools.count(key)) continue;
+    int kk = key_index[key];
+    bool held = n->size() == 1 && !n->at(0).is_null() && n->at(0).get<int>() == 0;
+    bool partial = n->size() >= 4 && (*n)[3].value("partial", false);
+    if (held) used += want * s.value[kk];
+    else if (partial) used += min<double>(want, have[key]) * s.value[kk];
+  }
+  return score(used, (int)p.order.size());
+}
+
+// the plan for qty of k: the thriftiest tree, short things made where they can be, and where they can't, planned
+// around (each round marks what's still short as scarce and plans again, keeping the last plan that worked).
+// something held that runs short and gets topped up is also tried without (86 lead dust beats making more lead
+// nuggets once the 9 held ones run out), whichever whole plan costs less is kept
 void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int force, json &nodes, json &jr, set<int> &named) {
   set<int> scarce;
   bool have_plan = false;
-  for (int round = 0; round < 4; round++) {
-    json n2 = json::object(), r2 = json::object();
-    set<int> seen2, named2;
+  double have_total = INFINITY;
+  auto attempt = [&](const set<int> &avoid, json &n2, json &r2, set<int> &named2) {
+    set<int> seen2;
     TreeBuild b{s, n2, r2, named2, seen2};
-    b.scarce = &scarce;
+    b.scarce = &avoid;
     b.root = k;
     b.root_qty = qty;
     // the target is made even when some is held: looking it up is wanting more of it. something nothing makes
     // stays held (or unreachable)
-    bool ok = b.add(k, force, !made_by[k].empty());
+    if (!b.add(k, force, !made_by[k].empty())) return false;
+    fill_shortfalls(s, g, k, qty, n2, r2, named2, seen2, &avoid);
+    return true;
+  };
+  for (int round = 0; round < 4; round++) {
+    json n2 = json::object(), r2 = json::object();
+    set<int> named2;
+    bool ok = attempt(scarce, n2, r2, named2);
     if (!ok && !have_plan) {
       // nothing works around what's short (or the thriftiest picks loop): the old way, short or not
-      n2 = json::object(), r2 = json::object(), seen2.clear(), named2.clear();
+      n2 = json::object(), r2 = json::object(), named2.clear();
+      set<int> seen2;
       add_tree(s, k, n2, r2, named2, seen2, force);
       ok = true;
     }
     if (!ok) break;
-    fill_shortfalls(s, g, k, qty, n2, r2, named2, seen2, &scarce);
+    double total = plan_total(s, g, k, qty, n2, r2);
+    if (have_plan && total >= have_total) break;  // planning around made it worse: keep what there is
     nodes = move(n2), jr = move(r2);
     named.insert(named2.begin(), named2.end());
     have_plan = true;
+    have_total = total;
+    // what to try avoiding next: held things it's short of and can't make, and held things it had to top up
     set<int> more = short_of(g, k, qty, nodes, jr);
+    for (auto &[key, n] : nodes.items())
+      if (key_index[key] != k && n.size() >= 4 && n[3].value("partial", false)) more.insert(key_index[key]);
     size_t before = scarce.size();
     scarce.insert(more.begin(), more.end());
     if (scarce.size() == before) break;
@@ -1057,9 +1123,15 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     }
     return (bool)(assembled[k] = any && all);
   };
+  // machines that break things down: one taking in something assembled is scrapping it, whether or not its outputs
+  // are what it was made from (a conveyor module macerates to rubber pulp and dusts, it was made from plates,
+  // cables and a motor)
+  static const set<string> breakdown = {"gt.recipe.macerator", "gt.recipe.arcfurnace", "gt.recipe.plasmaarcfurnace",
+                                        "gt.recipe.fluidextractor", "gt.recipe.extractor", "ic.recipe.recycler"};
   plannable.assign(recipes.size(), true);
   for (int r = 0; r < (int)recipes.size(); r++) {
-    if (!recycling[r] || types[recipes[r].type] == "gt.recipe.fluidcanner") continue;
+    const string &type = types[recipes[r].type];
+    if (type == "gt.recipe.fluidcanner" || (!recycling[r] && !breakdown.count(type))) continue;
     bool scraps = false;
     for (auto &slot : recipes[r].in)
       if (slot.count > 0 && !slot.alts.empty()) scraps |= is_assembled(slot.alts[0]);
