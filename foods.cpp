@@ -92,6 +92,9 @@ vector<int> used_in;             // key -> how many recipes take it
 // per recipe: it takes something apart (its input is itself made from what it gives: melting a polyethylene rod,
 // emptying a cell, macerating a machine). listed last, never a route's way to a held thing's worth
 vector<bool> recycling;
+// per recipe: a fingerprint that survives re-dumps (its machine, ingredients and outputs hashed), and back. a
+// recipe turned off on the page is stored by it, its number changes whenever the dump does
+vector<string> recipe_sig;
 // per recipe: a plan may use it. not one scrapping something assembled (macerating a machine or a conveyor: it
 // destroys what took several things to make). turning a material from one form into another is fine (melting
 // an ingot, macerating a rod), and so is emptying a container (a cell, can, capsule in the fluid canner)
@@ -166,6 +169,7 @@ string display(int k) {
 
 struct Solved {
   bool build = false;  // may plan building machines the group doesn't have
+  set<int> banned;     // recipes the person asking turned off: never used, for routes or for worth
   vector<bool> held;   // per key: really in the group's storage (not just free: water, circuits)
   vector<bool> free;   // per key: costs nothing: water, the group's free fluids (steam with a boiler)
   // what the group's Logistics Pipes crafting modules make: result -> the ingredients they're set up with
@@ -271,6 +275,9 @@ double run_setup(const Solved &s, const Recipe &rc) {
 }
 bool gt_key(int k) { return keys[k].compare(0, 9, "gregtech:") == 0; }
 int steps_of(const Solved &s, int alt) { return wild[alt] ? s.steps_any[name_of[alt]] : s.steps[alt]; }
+// a recipe a plan may use: not scrapping, not turned off
+bool allowed(const Solved &s, int r) { return plannable[r] && !s.banned.count(r); }
+
 // a recipe the group's crafting modules run by themselves: it makes what a module makes, and every ingredient it
 // uses up is one that module is set up with (an iron plate from iron ingots, not from a bending machine's ingot)
 bool automated(const Solved &s, const Recipe &rc) {
@@ -334,9 +341,10 @@ double route_score(const Solved &s, const Recipe &rc, int k, double qty = 0) {
 // how many recipe steps each key is from the group's holdings. a recipe works when its machine is owned (with
 // the voltage) and every slot has an alternative that's reachable, its outputs are one step past its slowest
 // slot. counts are ignored: holding one of an ingredient is enough, so "craftable" can mean "once"
-Solved solve(const FoodGroup &g, bool build) {
+Solved solve(const FoodGroup &g, bool build, const set<int> &banned = {}) {
   Solved s;
   s.build = build;
+  s.banned = banned;
   s.dist.assign(keys.size(), INF);
   s.best.assign(keys.size(), -1);
   s.any.assign(name_index.size(), INF);
@@ -398,7 +406,7 @@ Solved solve(const FoodGroup &g, bool build) {
     bool changed = false;
     for (int r = 0; r < (int)recipes.size(); r++) {
       const Recipe &rc = recipes[r];
-      if (!plannable[r]) continue;
+      if (!allowed(s, r)) continue;
       int worst = 0;
       if (!owns(s, rc)) {
         int m = machine_to_build(s, rc);
@@ -430,7 +438,7 @@ Solved solve(const FoodGroup &g, bool build) {
   vector<int> runnable;
   for (int r = 0; r < (int)recipes.size(); r++) {
     const Recipe &rc = recipes[r];
-    if (!plannable[r] || (!owns(s, rc) && machine_to_build(s, rc) < 0)) continue;
+    if (!allowed(s, r) || (!owns(s, rc) && machine_to_build(s, rc) < 0)) continue;
     bool useful = false;
     for (auto &o : rc.out) useful |= s.dist[o.key] > 0 && s.dist[o.key] < INF;
     if (useful) runnable.push_back(r);
@@ -521,7 +529,7 @@ Solved solve(const FoodGroup &g, bool build) {
     double best = INFINITY;
     for (int r : made_by[k]) {
       const Recipe &rc = recipes[r];
-      if (!can_run(s, rc) || !plannable[r]) continue;
+      if (!can_run(s, rc) || !allowed(s, r)) continue;
       bool loops = false;
       for (auto &slot : rc.in) {
         if (slot.count == 0 || slot.alts.empty() || loops) continue;
@@ -561,6 +569,7 @@ json recipe_json(int r, set<int> &named) {
   // only what plans won't use (a breakdown machine scrapping something assembled), not every recipe the loose
   // recycling check flags (an assembler putting logistics pipes into a chassis)
   if (!plannable[r]) j["recycling"] = true;
+  j["sig"] = recipe_sig[r];
   return j;
 }
 
@@ -601,7 +610,7 @@ struct TreeBuild {
     vector<pair<double, int>> c;
     for (int r : made_by[k]) {
       double per = made_per_run(recipes[r], k);
-      if (per <= 0 || !plannable[r] || !machine_ok(s, recipes[r])) continue;
+      if (per <= 0 || !allowed(s, r) || !machine_ok(s, recipes[r])) continue;
       // the top of the plan is judged for the amount asked, deeper ones for a typical amount
       double sc = route_score(s, recipes[r], k, k == root ? root_qty : 0);
       if (sc < INFINITY) c.emplace_back(sc, r);
@@ -936,7 +945,7 @@ void build_plan(const Solved &s, const FoodGroup *g, int k, double qty, int forc
     if (!avoid.empty() && g) {
       FoodGroup g2 = *g;
       for (int a : avoid) g2.held.erase(keys[a]);
-      without = make_shared<Solved>(solve(g2, s.build));
+      without = make_shared<Solved>(solve(g2, s.build, s.banned));
       use = without.get();
     }
     set<int> seen2;
@@ -1080,11 +1089,14 @@ json blockers(const Solved &s, int k, int depth, set<int> &stack) {
 
 // a group's solve for the current snapshot, kept until the next one. call with state_lock held
 // build: may plan building missing machines (the recipe pages). the food planner counts only what can be made now
-shared_ptr<Solved> solved(const string &group, bool build) {
-  auto &c = solve_cache[(build ? "build:" : "now:") + group];
+// banned: recipes the person asking turned off. each set of them is its own solve, kept like the rest
+shared_ptr<Solved> solved(const string &group, bool build, const set<int> &banned = {}) {
+  string key = (build ? "build:" : "now:") + group;
+  for (int r : banned) key += ":" + to_string(r);
+  auto &c = solve_cache[key];
   if (!c.second || c.first != generation) {
     auto g = snapshot.groups.find(group);
-    c = {generation, make_shared<Solved>(solve(g != snapshot.groups.end() ? g->second : FoodGroup{}, build))};
+    c = {generation, make_shared<Solved>(solve(g != snapshot.groups.end() ? g->second : FoodGroup{}, build, banned))};
   }
   return c.second;
 }
@@ -1190,6 +1202,20 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     bool fluid0 = keys[rc.out[0].key].compare(0, 6, "fluid:") == 0, fluid1 = keys[rc.out[1].key].compare(0, 6, "fluid:") == 0;
     if (fluid0 != fluid1) containers.insert(fluid0 ? rc.out[1].key : rc.out[0].key);
   }
+  recipe_sig.assign(recipes.size(), "");
+  for (int r = 0; r < (int)recipes.size(); r++) {
+    string text = types[recipes[r].type];
+    for (auto &slot : recipes[r].in) {
+      text += "|" + to_string(slot.count);
+      for (int a : slot.alts) text += "," + keys[a];
+    }
+    for (auto &o : recipes[r].out) text += ">" + keys[o.key] + "x" + to_string(o.amount);
+    uint64_t h = 1469598103934665603ull;  // FNV-1a
+    for (unsigned char c : text) h = (h ^ c) * 1099511628211ull;
+    char buf[17];
+    snprintf(buf, sizeof(buf), "%016llx", (unsigned long long)h);
+    recipe_sig[r] = buf;
+  }
   recycling.assign(recipes.size(), false);
   for (int r = 0; r < (int)recipes.size(); r++) {
     set<int> outs;
@@ -1240,6 +1266,19 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
   // (macerating a conveyor module to rubber pulp and dusts, smelting or alloy smelting a motor back to a rubber bar).
   // building puts out something assembled, an assembler putting logistics pipes and a circuit into a chassis is
   // fine. emptying a cell in the fluid canner is fine too
+  // vanilla raw materials (redstone, glowstone, ingots, coal, gems, dyes): materials however some modded recipe
+  // also puts them together, as long as one way makes them from a single thing (smelting, crushing ore,
+  // crafting from piles or nuggets). a spray can extracted to redstone dust and tin is scrapping
+  auto vanilla_material = [&](int k) {
+    if (keys[k].compare(0, 10, "minecraft:") != 0) return false;
+    for (int r : made_by[k]) {
+      set<int> used;
+      for (auto &slot : recipes[r].in)
+        if (slot.count > 0 && !slot.alts.empty()) used.insert(slot.alts[0]);
+      if (used.size() == 1) return true;
+    }
+    return false;
+  };
   plannable.assign(recipes.size(), true);
   for (int r = 0; r < (int)recipes.size(); r++) {
     if (types[recipes[r].type] == "gt.recipe.fluidcanner") continue;
@@ -1248,7 +1287,7 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       if (slot.count > 0 && !slot.alts.empty()) takes |= is_assembled(slot.alts[0]);
     if (!takes) continue;
     for (auto &o : recipes[r].out)
-      if (keys[o.key].compare(0, 6, "fluid:") != 0) gives |= is_assembled(o.key);
+      if (keys[o.key].compare(0, 6, "fluid:") != 0 && !vanilla_material(o.key)) gives |= is_assembled(o.key);
     plannable[r] = gives;
   }
   circuit_key.assign(keys.size(), false);
@@ -1376,7 +1415,12 @@ string recipes_groups_json() {
   return json{{"groups", g}, {"players", players}}.dump();
 }
 
-string recipes_item_json(const string &key, const string &group, int force, double qty) {
+string recipes_item_json(const string &key, const string &group, int force, double qty, const set<string> &banned_sigs) {
+  // turned off recipes come as fingerprints: every recipe with one (identical recipes share it)
+  set<int> banned;
+  if (!banned_sigs.empty())
+    for (int r = 0; r < (int)recipes.size(); r++)
+      if (banned_sigs.count(recipe_sig[r])) banned.insert(r);
   lock_guard<mutex> l(state_lock);
   auto f = key_index.find(key);
   if (!loaded || f == key_index.end()) return "{\"error\":\"unknown item\"}";
@@ -1384,10 +1428,10 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   if (qty <= 0) qty = wild[k] || key.compare(0, 6, "fluid:") != 0 ? 1 : 1000;
   // what can be made with the machines the group has comes first (the same plan the food planner counts), only
   // when there's no way does the plan build machines
-  shared_ptr<Solved> now = solved(group, false), build = solved(group, true);
+  shared_ptr<Solved> now = solved(group, false, banned), build = solved(group, true, banned);
   shared_ptr<Solved> s = now->dist[k] < INF ? now : build;
   // a recipe picked to plan with that only works by building a machine somewhere along it: plan with building
-  auto runs = [&](const Solved &v, int r) { return plannable[r] && machine_ok(v, recipes[r]) && run_cost(v, recipes[r]) < INFINITY; };
+  auto runs = [&](const Solved &v, int r) { return allowed(v, r) && machine_ok(v, recipes[r]) && run_cost(v, recipes[r]) < INFINITY; };
   bool pick = force >= 0 && force < (int)recipes.size() && find(made_by[k].begin(), made_by[k].end(), force) != made_by[k].end();
   if (pick && !runs(*s, force) && runs(*build, force)) s = build;
   set<int> named{k};
@@ -1441,8 +1485,9 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     // the same score the plan picks by, from the same solve (the machines the group has, when that works)
     // scored from what the plan uses (the machines the group has, when that works), otherwise with building
     // machines along the way, and then the card says so
-    double c = state / 2 == 0 && plannable[r] ? route_score(*s, recipes[r], k, qty) : INFINITY;
-    if (c == INFINITY && state / 2 == 0 && plannable[r] && s != build) {
+    double c = state / 2 == 0 && allowed(*s, r) ? route_score(*s, recipes[r], k, qty) : INFINITY;
+    if (banned.count(r)) rj["banned"] = true;
+    if (c == INFINITY && state / 2 == 0 && allowed(*build, r) && s != build) {
       c = route_score(*build, recipes[r], k, qty);
       if (c < INFINITY) rj["needs_build"] = true;
     }
@@ -1487,7 +1532,7 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   // something along it (or it was the one picked, then this is the thriftiest)
   double took = INFINITY, best = INFINITY;
   for (int r : made_by[k])
-    if (plannable[r] && machine_ok(*s, recipes[r])) best = min(best, route_score(*s, recipes[r], k, qty));
+    if (allowed(*s, r) && machine_ok(*s, recipes[r])) best = min(best, route_score(*s, recipes[r], k, qty));
   if (auto root = nodes.find(key); root != nodes.end() && root->size() >= 3 && !(*root)[0].is_null() && (*root)[1].get<int>() >= 0)
     took = route_score(*s, recipes[(*root)[1].get<int>()], k, qty);
   out["route"]["cost"] = forced || took == INFINITY ? (best == INFINITY ? json(nullptr) : json(best)) : json(took);

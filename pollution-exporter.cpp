@@ -1857,7 +1857,18 @@ int main(int argc, char **argv) {
       r.body = target == "/recipes/search.json" ? recipes_search_json(param("q"))
              : target == "/recipes/groups.json" ? recipes_groups_json()
              : recipes_item_json(param("key"), param("group"), param("recipe").empty() ? -1 : atoi(param("recipe").c_str()),
-                                 param("qty").empty() ? 0 : atof(param("qty").c_str()));
+                                 param("qty").empty() ? 0 : atof(param("qty").c_str()), [&] {
+                                   // ban=<fingerprint>,<fingerprint>: recipes turned off on the page
+                                   set<string> ban;
+                                   string b = param("ban");
+                                   for (size_t at = 0; at < b.size();) {
+                                     size_t end = b.find(',', at);
+                                     if (end == string::npos) end = b.size();
+                                     if (end > at) ban.insert(b.substr(at, end - at));
+                                     at = end + 1;
+                                   }
+                                   return ban;
+                                 }());
       return true;
     }
     if (target == "/foods/state.json") {

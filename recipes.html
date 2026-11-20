@@ -129,6 +129,7 @@ details.all > summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 .alt .use { margin-left: auto; border: 1px solid var(--accent); background: none; color: var(--accent); border-radius: 999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; }
 .alt .use:hover, .alt .use[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
 .alt.chosen { border-color: var(--accent); }
+.alt.off { opacity: .55; }
 .hint button { all: unset; cursor: pointer; color: var(--accent); text-decoration: underline; }
 .note { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 12px; color: var(--muted); font-size: 13px; }
 </style>
@@ -163,6 +164,9 @@ const TIERS = ["ULV", "LV", "MV", "HV", "EV", "IV", "LuV", "ZPM", "UV", "UHV", "
 const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
+// recipes turned off here, by fingerprint (survives re-dumps), kept in this browser
+let banned = new Set((() => { try { return JSON.parse(localStorage.getItem("recipes.banned") || "[]"); } catch (e) { return []; } })());
+const saveBanned = () => store.set("recipes.banned", JSON.stringify([...banned]));
 let current = null, planQty = null, forced = null, onlyReady = false, sortBy = store.get("recipes.sort") || "route", names = {};
 const icons = { size: 16, columns: 128, cells: {}, version: "" };
 const isFluid = k => k.startsWith("fluid:");
@@ -558,6 +562,13 @@ function altCard(p, key, best) {
     h.append(b);
   }
   if (forced === p.id) c.classList.add("chosen");
+  // turning a variant off: plans never use it (kept in this browser)
+  const off = banned.has(p.sig);
+  if (off) { c.classList.add("off"); h.append(el("span", "chip", "turned off")); }
+  const t = el("button", "use", off ? "use again" : "don't use");
+  t.title = off ? "Let plans use this recipe again" : "Never use this recipe in plans";
+  t.addEventListener("click", () => { off ? banned.delete(p.sig) : banned.add(p.sig); saveBanned(); open(current, false); });
+  h.append(t);
   c.append(h);
   const ins = p.slots.map(s => {
     if (!s.alts.length) return [null, 0];
@@ -577,7 +588,7 @@ async function open(key, push = true) {
   if (push) history.replaceState(null, "", `#g=${encodeURIComponent($("group").value)}&k=${encodeURIComponent(key)}`);
   for (const b of $("results").querySelectorAll("button")) b.setAttribute("aria-current", b.dataset.key === key);
   $("detail").replaceChildren(el("p", "muted", "Loading…"));
-  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}${forced != null ? "&recipe=" + forced : ""}${planQty != null ? "&qty=" + planQty : ""}`)).json();
+  const r = await (await fetch(`item.json?key=${encodeURIComponent(key)}&group=${encodeURIComponent($("group").value)}${forced != null ? "&recipe=" + forced : ""}${planQty != null ? "&qty=" + planQty : ""}${banned.size ? "&ban=" + [...banned].join(",") : ""}`)).json();
   if (current !== key) return;
   if (r.error) { $("detail").replaceChildren(el("p", "muted", r.error)); return; }
   learn(r);
@@ -636,7 +647,14 @@ function render(r, key, qty) {
     sort.addEventListener("change", () => { sortBy = sort.value; store.set("recipes.sort", sortBy); fill(); });
     ctl.append(sort);
     const list = el("div");
-    all.append(ctl, list);
+    all.append(ctl);
+    if (banned.size) {
+      const bar = el("div", "muted"), reset = el("button", "use", "turn them all back on");
+      bar.append(`${banned.size} recipe${banned.size > 1 ? "s" : ""} turned off, plans don't use ${banned.size > 1 ? "them" : "it"}. `, reset);
+      reset.addEventListener("click", () => { banned.clear(); saveBanned(); open(current, false); });
+      all.append(bar);
+    }
+    all.append(list);
     const fill = () => {
       const shown = r.producers.filter(p => !onlyReady || p.state === "ready");
       for (const p of shown) p.yield = yieldOf(p, key);
