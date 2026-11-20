@@ -70,8 +70,8 @@ json icons_json(const set<int> &named) {
   for (int k : named) {
     auto f = icon_of.find(keys[k]);
     // "any damage": the plain damage 0 picture
-    // "any damage", or a circuit configuration without its own picture: the plain damage 0 one
-    if (f == icon_of.end() && (wild[k] || circuit_key[k])) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
+    // "any damage": the plain damage 0 picture (not for a circuit, circuit 0's picture would show the wrong number)
+    if (f == icon_of.end() && wild[k]) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
     if (f != icon_of.end()) icons[keys[k]] = f->second;
   }
   return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}};
