@@ -164,7 +164,7 @@ const $ = id => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const store = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} } };
 let current = null, planQty = null, forced = null, onlyReady = false, sortBy = store.get("recipes.sort") || "route", names = {};
-const icons = { size: 16, columns: 128, cells: {} };
+const icons = { size: 16, columns: 128, cells: {}, version: "" };
 const isFluid = k => k.startsWith("fluid:");
 const name = k => names[k] || k;
 const fmt = n => (+n.toFixed(2)).toLocaleString();
@@ -172,7 +172,11 @@ const amount = (k, n) => isFluid(k) ? `${fmt(n)} mB` : `${fmt(n)}`;
 const circuitOf = k => { const m = /^gregtech:gt\.integrated_circuit:(\d+)$/.exec(k || ""); return m ? +m[1] : null; };
 function learn(r) {
   Object.assign(names, r.names || {});
-  if (r.icons) { icons.size = r.icons.size; icons.columns = r.icons.columns; Object.assign(icons.cells, r.icons.cells); }
+  if (r.icons) {
+    // a new sheet (redumped) moves every picture: start over with its cells
+    if (r.icons.version !== icons.version) { icons.cells = {}; icons.version = r.icons.version; }
+    icons.size = r.icons.size; icons.columns = r.icons.columns; Object.assign(icons.cells, r.icons.cells);
+  }
 }
 
 function machine(r) {
@@ -191,7 +195,7 @@ function icon(k, cls = "") {
   if (c === undefined) { const s = el("span", "icon none " + cls, (name(k).replace(/^any /, "")[0] || "?").toUpperCase()); return s; }
   const s = el("span", "icon " + cls);
   const px = cls === "xs" ? 16 : cls === "sm" ? 24 : cls === "lg" ? 48 : 32;
-  s.style.backgroundImage = "url(icons.png)";
+  s.style.backgroundImage = `url(icons.png?v=${icons.version})`;
   s.style.backgroundSize = `${icons.columns * px}px auto`;
   s.style.backgroundPosition = `-${(c % icons.columns) * px}px -${Math.floor(c / icons.columns) * px}px`;
   return s;

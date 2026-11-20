@@ -59,6 +59,9 @@ map<string, string> machine_names;  // texture-dump's recipe_maps.json: GT recip
 unordered_map<string, int> icon_of;  // texture-dump's item_icons.json: key -> cell in item_icons.png
 int icon_size = 16, icon_columns = 0;
 string icons_png;
+// a hash of the sheet: pages ask for icons.png?v=<it>, so a new sheet is a new address and no browser keeps
+// cutting pictures out of an old one
+string icons_version;
 
 // per key: a GregTech programmed circuit. free as a machine's setting (a slot that isn't used up), but a recipe
 // that uses one up needs a real one
@@ -74,7 +77,7 @@ json icons_json(const set<int> &named) {
     if (f == icon_of.end() && wild[k]) f = icon_of.find(keys[k].substr(0, keys[k].rfind(':')) + ":0");
     if (f != icon_of.end()) icons[keys[k]] = f->second;
   }
-  return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}};
+  return {{"size", icon_size}, {"columns", icon_columns}, {"cells", icons}, {"version", icons_version}};
 }
 bool loaded = false;
 
@@ -932,6 +935,9 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
       icon_columns = ic["columns"].get<int>();
       for (auto &[k, v] : ic["icons"].items()) icon_of[k] = v.get<int>();
       icons_png = readFile(dir / "item_icons.png");
+      char v[17];
+      snprintf(v, sizeof(v), "%016zx", hash<string>{}(icons_png));
+      icons_version = v;
     }
     if (exists(dir / "gt_machine_maps.json")) {
       json m = json::parse(readFile(dir / "gt_machine_maps.json"));

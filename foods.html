@@ -87,7 +87,7 @@ function icon(k) {
   const c = S.icons?.cells?.[k];
   if (c === undefined) return el("span", "icon none", (name(k)[0] || "?").toUpperCase());
   const s = el("span", "icon"), size = S.icons.size, cols = S.icons.columns;
-  s.style.backgroundImage = "url(icons.png)";
+  s.style.backgroundImage = `url(icons.png?v=${S.icons.version || ""})`;
   s.style.backgroundSize = `${cols * 32}px auto`;
   s.style.backgroundPosition = `-${(c % cols) * 32}px -${Math.floor(c / cols) * 32}px`;
   return s;

@@ -1704,7 +1704,8 @@ int main(int argc, char **argv) {
       r.status = "200 OK";
       r.ctype = "image/png";
       r.body = recipes_icons_png();
-      r.headers = "Cache-Control: max-age=3600\r\n";
+      // pages ask for it by its contents' hash (icons.png?v=...), a new sheet is a new address
+      r.headers = "Cache-Control: public, max-age=31536000, immutable\r\n";
       return true;
     }
     if (target == "/recipes/search.json" || target == "/recipes/item.json" || target == "/recipes/groups.json") {
