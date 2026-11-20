@@ -405,7 +405,7 @@ function howTo(r, key, qty) {
   }
   if (r.blockers) {
     const note = el("div", "card hint");
-    note.append("This is a possible path. Some ingredients or machines are missing, so the steps cannot all be done yet.");
+    note.append("This is a possible recipe path, not a complete shopping list. It stops at missing materials or machines, and its quantities may change once those paths are known.");
     const details = el("details"), summary = el("summary", null, "Why this path is blocked"), ul = el("ul");
     ul.append(blockerTree(r.blockers));
     details.append(summary, ul);
@@ -433,7 +433,7 @@ function howTo(r, key, qty) {
   }
   // what you need to start
   const needCard = el("div", "card"), grid = el("div", "needs");
-  needCard.append(el("div", "muted", "You'll use"));
+  needCard.append(el("div", "muted", route.provisional ? "Needed or not yet sourced" : "You'll use"));
   needCard.lastChild.style.marginBottom = "8px";
   for (const k of p.leaves.sort((a, b) => p.tools.has(a) - p.tools.has(b) || name(a).localeCompare(name(b)))) {
     if (circuitOf(k) !== null || k === "fluid:water" || (r.free || []).includes(k)) continue;
@@ -514,6 +514,7 @@ function howTo(r, key, qty) {
     else if (p.chance.has(k)) head.append(el("span", "chip", "chance output"));
     const m = p.extra(k).machine;
     if (m) { const c = el("span", "chip build"); c.append(`on the ${name(m)} from step ${p.step.get(p.canon(m)) ?? "?"}`); head.append(c); }
+    if (p.extra(k).missing_machine) head.append(el("span", "chip build", `needs ${p.extra(k).missing_machine}`));
     if (p.fromStore.get(k)) head.append(el("span", "chip", `you have ${amount(k, p.fromStore.get(k))}, this makes the rest`));
     if (p.extra(k).auto) head.append(el("span", "chip pick", "your crafting module makes this"));
     li.append(head);

@@ -194,8 +194,16 @@ struct Solved {
 };
 
 int cost_of(const Solved &s, int alt) { return wild[alt] ? s.any[name_of[alt]] : s.dist[alt]; }
+bool single_use_tooling(int k) {
+  const string &key = keys[k];
+  if (!key.starts_with("ggfab:gt.ggfab.d1:")) return false;
+  int meta = atoi(key.c_str() + key.rfind(':') + 1);
+  return meta <= 7 || (meta >= 30 && meta <= 37);  // disposable tools and the molds made only for them
+}
 // a slot's alternative can be used: a circuit only as a setting, unless one is really held
-bool usable(const Solved &s, const Slot &slot, int alt) { return !circuit_key[alt] || slot.count == 0 || s.held[alt]; }
+bool usable(const Solved &s, const Slot &slot, int alt) {
+  return !single_use_tooling(alt) && (!circuit_key[alt] || slot.count == 0 || s.held[alt]);
+}
 double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[alt]] : s.cost[alt]; }
 
 // what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
@@ -1074,6 +1082,7 @@ struct Missing {
     vector<int> rs = made_by[k];
     stable_sort(rs.begin(), rs.end(), [](int a, int b) {
       if (plannable[a] != plannable[b]) return plannable[a] > plannable[b];
+      if (recycling[a] != recycling[b]) return recycling[a] < recycling[b];
       return recipes[a].in.size() < recipes[b].in.size();
     });
     if (rs.size() > 40) rs.resize(40);
@@ -1159,7 +1168,40 @@ struct MissingPlan {
   Missing missing;
   set<int> stack, seen;
   vector<int> added;
-  int budget = 500;
+  int budget = 100;
+
+  // For an unavailable material, start from dusts and ingots before plates, tool parts or placed blocks.
+  // This keeps a provisional path pointed toward primary production rather than melting a finished part.
+  int source_rank(int k) const {
+    if (cost_of(s, k) == 0) return -2;
+    const string &key = keys[k];
+    if (key.starts_with("gregtech:gt.metaitem.01:")) {
+      int meta = atoi(key.c_str() + key.rfind(':') + 1);
+      if ((meta >= 2000 && meta < 3000) || (meta >= 11000 && meta < 13000)) return 0;
+      return meta < 32000 ? 2 : 3;
+    }
+    if (key.starts_with("fluid:")) return 1;
+    if (key.starts_with("gregtech:gt.metaitem.02:")) return 3;
+    if (key.starts_with("TGregworks:") || key.starts_with("gregtech:gt.block")) return 5;
+    return 2;
+  }
+  int recipe_rank(int r) const {
+    const string &type = types[recipes[r].type];
+    int rank = type == "gt.recipe.polarizer" || type == "gt.recipe.vacuumfreezer" ? -10
+             : type == "gt.recipe.blastfurnace" ? -8
+             : type == "gt.recipe.mixer" ? -6
+             : type == "gt.recipe.metalbender" ? -5
+             : type == "gt.recipe.extruder" ? -3
+             : type == "gt.recipe.arcfurnace" || type == "gt.recipe.fluidcanner" ? 8
+             : type == "gt.recipe.fluidsolidifier" || type == "gt.recipe.fluidextractor" || type == "smelting" ? 5 : 0;
+    for (auto &slot : recipes[r].in) {
+      if (slot.count <= 0 || slot.alts.empty()) continue;
+      int best = 10;
+      for (int a : slot.alts) best = min(best, source_rank(a));
+      rank += best;
+    }
+    return rank;
+  }
 
   void put(int k, json n) {
     nodes[keys[k]] = move(n);
@@ -1180,10 +1222,31 @@ struct MissingPlan {
     missing.stack = stack;
     return missing.key(k, 3);
   }
+  bool needs_stack(int k) const {
+    set<int> visited;
+    function<bool(int)> walk = [&](int x) {
+      if (!visited.insert(x).second) return false;
+      auto n = nodes.find(keys[x]);
+      if (n == nodes.end() || n->size() < 3) return false;
+      for (auto &u : (*n)[2]) {
+        if (u.is_null()) continue;
+        int child = key_index[u.get<string>()];
+        if (stack.count(child) || walk(child)) return true;
+      }
+      return false;
+    };
+    return walk(k);
+  }
   bool add(int k, int depth = 0) {
-    if (seen.count(k)) return true;
     if (stack.count(k)) return false;
-    if (--budget < 0 || depth >= 28 || (made_by[k].empty() && !wild[k])) {
+    if (seen.count(k)) return !needs_stack(k);
+    // High-tier circuit placeholders fan out into thousands of speculative parts. Leave one as a clearly
+    // missing ingredient. Its own page can explain its routes without swamping this machine's plan.
+    if (cost_of(s, k) != 0 && keys[k].starts_with("dreamcraft:item.Circuit")) {
+      put(k, {nullptr});
+      return true;
+    }
+    if (--budget < 0 || depth >= 12 || (made_by[k].empty() && !wild[k])) {
       put(k, {nullptr});
       return true;
     }
@@ -1204,10 +1267,14 @@ struct MissingPlan {
         }
     } else {
       vector<int> choices;
-      bool preferred = s.cheapest[k] >= 0 && allowed(s, s.cheapest[k]);
-      if (preferred) choices.push_back(s.cheapest[k]);
-      for (int r : missing.order(k)) if (allowed(s, r) && find(choices.begin(), choices.end(), r) == choices.end()) choices.push_back(r);
-      stable_sort(choices.begin() + (preferred ? 1 : 0), choices.end(), [&](int a, int b) {
+      for (int r : made_by[k]) if (allowed(s, r)) choices.push_back(r);
+      stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
+        return recipe_rank(a) < recipe_rank(b);
+      });
+      if (choices.size() > 40) choices.resize(40);
+      stable_sort(choices.begin(), choices.end(), [&](int a, int b) {
+        int ra = recipe_rank(a), rb = recipe_rank(b);
+        if (ra != rb) return ra < rb;
         missing.stack = stack;
         int ca = missing.recipe(a, 3);
         missing.stack = stack;
@@ -1228,13 +1295,8 @@ struct MissingPlan {
           if (!found) { ok = false; break; }
         }
         if (ok && !owns(s, recipes[r])) {
-          int need = recipes[r].eut > 0 ? tier_for(recipes[r].eut) : 0;
-          vector<int> machines;
-          for (auto &m : machine_items[recipes[r].type]) if (m.tier >= need) machines.push_back(m.key);
-          stable_sort(machines.begin(), machines.end(), [&](int a, int b) { return distance(a) < distance(b); });
-          ok = false;
-          for (int m : machines)
-            if (add(m, depth + 1)) { extra["machine"] = keys[m]; ok = true; break; }
+          auto name = machine_names.find(types[recipes[r].type]);
+          extra["missing_machine"] = name != machine_names.end() ? name->second : types[recipes[r].type];
         }
         if (ok) {
           json n = {1, r, uses};
@@ -1421,9 +1483,10 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
     // make more dust from gallium and arsenic, not dismantling a finished component.
     if (key == "gregtech:gt.metaitem.03:32190" || key == "gregtech:gt.metaitem.03:32191")
       return (bool)(assembled[k] = 0);
-    // GregTech's blocks you place, pipes, cables and machines: built things, even a pipe made from one material
-    // (smelting small steel fluid pipes back to ingots is scrapping them)
-    if (key.compare(0, 25, "gregtech:gt.blockmachines") == 0) return (bool)(assembled[k] = 1);
+    // GregTech's placed frames, casings, pipes, cables and machines are built things even when made from one
+    // material (macerating a steel frame back to dust is scrapping it).
+    if (key.starts_with("gregtech:gt.blockmachines") || key.starts_with("gregtech:gt.blockframes") ||
+        key.starts_with("gregtech:gt.blockcasings")) return (bool)(assembled[k] = 1);
     bool any = false;
     for (int r : made_by[k]) {
       // every way counts, even ones the loose recycling check flags (a cable is made from wire and rubber, cables
@@ -1454,6 +1517,10 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
   };
   plannable.assign(recipes.size(), true);
   for (int r = 0; r < (int)recipes.size(); r++) {
+    if (!recipes[r].out.empty() && all_of(recipes[r].out.begin(), recipes[r].out.end(), [](const Out &o) { return single_use_tooling(o.key); })) {
+      plannable[r] = false;
+      continue;
+    }
     if (types[recipes[r].type] == "gt.recipe.fluidcanner") continue;
     bool takes = false, gives = false;
     for (auto &slot : recipes[r].in)
@@ -1749,6 +1816,7 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     }
   out["route"] = {{"nodes", nodes}, {"recipes", jr}};
   if (s->dist[k] >= INF) {
+    out["route"]["provisional"] = true;
     set<int> stack;
     json b = blockers(*s, k, 5, stack);
     // name everything in it, and the recipes it names
