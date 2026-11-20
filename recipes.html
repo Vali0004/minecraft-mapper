@@ -73,7 +73,7 @@ input.qty { width: 110px; padding: 6px 10px; }
 .chip { border-radius: 999px; padding: 1px 9px; font-size: 12px; white-space: nowrap; background: var(--held-soft); color: var(--held); }
 .chip.pick { background: var(--accent-soft); color: var(--accent); }
 .chip.circuit { background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; font-weight: 600; }
-.chip.circuit .icon { margin-right: 3px; }
+.icon.circuiticon { align-self: center; }
 /* the machine's circuit slot, apart from the inputs like GregTech's screen has it */
 .slot.circuitslot { outline: 2px dashed var(--held); outline-offset: -2px; margin-left: 4px; }
 .slot.circuitslot .n { font-size: 13px; }
@@ -205,10 +205,12 @@ function circuitSlot(k) {
   if (icons.cells[k] === icons.cells["gregtech:gt.integrated_circuit:0"] && circuitOf(k) !== 0) s.append(el("span", "n", circuitOf(k)));
   return s;
 }
+// in a step's header: just the circuit's own picture, its number is drawn in it like in the game
 function circuitChip(k) {
-  const c = el("span", "chip circuit");
+  const c = icon(k, "sm");
+  c.classList.add("circuiticon");
   c.title = `Programmed Circuit ${circuitOf(k)}, set in the machine`;
-  c.append(icon(k, "xs"), `${circuitOf(k)}`);
+  c.setAttribute("aria-label", c.title);
   return c;
 }
 
