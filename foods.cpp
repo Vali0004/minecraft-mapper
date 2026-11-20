@@ -1034,6 +1034,14 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
           Slot s;
           s.count = slot[0].get<int>();
           for (size_t i = 1; i < slot.size(); i++) s.alts.push_back(intern(slot[i].get<string>()));
+          // a GregTech tool in a crafting grid (hammer, wire cutter, file) takes damage, it isn't used up. the dump
+          // only spots tools that come back whole, GregTech's come back worn. a slot also taking GG Fab's single use
+          // tool still only needs the reusable one
+          if (rc.type == type_of("crafting")) {
+            bool tool = false;
+            for (int a : s.alts) tool |= keys[a].compare(0, 21, "gregtech:gt.metatool.") == 0;
+            if (tool) s.count = 0;
+          }
           rc.in.push_back(move(s));
         }
         for (auto &o : e["out"]) rc.out.push_back({intern(o[0].get<string>()), o[1].get<int>(), o[2].get<int>()});
@@ -1145,7 +1153,9 @@ bool foods_load(const filesystem::path &dir, FoodNamer n) {
   plannable.assign(recipes.size(), true);
   for (int r = 0; r < (int)recipes.size(); r++) {
     const string &type = types[recipes[r].type];
-    if (type == "gt.recipe.fluidcanner" || (!recycling[r] && !breakdown.count(type))) continue;
+    // only a machine that breaks things down scraps them: an assembler putting logistics pipes and a circuit into
+    // a chassis is building, whatever the recycling check thinks
+    if (!breakdown.count(type)) continue;
     bool scraps = false;
     for (auto &slot : recipes[r].in)
       if (slot.count > 0 && !slot.alts.empty()) scraps |= is_assembled(slot.alts[0]);

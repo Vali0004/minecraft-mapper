@@ -619,6 +619,26 @@ public class TextureDump {
     return true;
   }
 
+  // a GregTech input that's a circuit tier placeholder ("Any MV Circuit"): every item in its circuit... ore
+  // dictionary entries, the placeholder first. anything else: just itself
+  List<String> circuitAlternatives(Object stack, String k, Method nameOf, Object itemRegistry) {
+    List<String> alts = new ArrayList<>();
+    alts.add(k);
+    try {
+      Class<?> od = Class.forName("net.minecraftforge.oredict.OreDictionary");
+      int[] ids = (int[]) od.getMethod("getOreIDs", Class.forName("net.minecraft.item.ItemStack")).invoke(null, stack);
+      for (int id : ids) {
+        String ore = (String) od.getMethod("getOreName", int.class).invoke(null, id);
+        if (ore == null || !ore.startsWith("circuit")) continue;
+        for (Object o : (List<?>) od.getMethod("getOres", String.class).invoke(null, ore)) {
+          String ok = key(o, nameOf, itemRegistry);
+          if (ok != null && !alts.contains(ok)) alts.add(ok);
+        }
+      }
+    } catch (Throwable t) {}
+    return alts;
+  }
+
   // texture-dump/foods.json: every food (by AppleCore, which knows what Spice of Life counts) with its hunger
   // and saturation, and texture-dump/recipes.json: every crafting, smelting and GregTech recipe that leads to
   // a food, followed back from the foods through their ingredients
@@ -726,7 +746,9 @@ public class TextureDump {
               if (st == null) continue;
               String k = key(st, nameOf, itemRegistry);
               if (k == null) { ok = false; break; }
-              r.in.add(java.util.Collections.singletonList(k));
+              // GregTech asks for "Any MV Circuit", a placeholder for the circuitGood ore dictionary entry: the
+              // machine takes any circuit of that tier. so are all of those
+              r.in.add(circuitAlternatives(st, k, nameOf, itemRegistry));
               r.inMeta.add(new int[] { (Integer) get(st, "field_77994_a", "stackSize") });
             }
             Object[] fin = (Object[]) gc.getField("mFluidInputs").get(g);
