@@ -841,6 +841,10 @@ void fill_shortfalls(const Solved &s, const FoodGroup *g, int k, double qty, jso
       seen.erase(kk);
       TreeBuild b{s, nodes, jr, named, seen};
       b.scarce = scarce;
+      // judged for what's missing, not a typical amount: making 4 more wires is one wiremill step, not 2x, 4x and
+      // 8x wire crafted back down (cheaper per wire for 64, not for 4)
+      b.root = kk;
+      b.root_qty = want - have[key];
       if (b.add(kk, -1, true)) grew = true;
       else {
         b.back_to(0);
