@@ -187,7 +187,9 @@ double raw_of(const Solved &s, int alt) { return wild[alt] ? s.cost_any[name_of[
 
 // what a held thing is worth: an item 1, a fluid's mB 1/144 (an ingot is 144 mB molten). every run of a recipe
 // also costs a little, so of two equally thrifty routes the shorter wins
-const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0.05, PRECIOUS = 16;
+// no cost per run: a recipe making more per run isn't better for it (8 ingots to a 16x wire to 16 wires isn't
+// better than 1 ingot to 2 wires), steps are what count
+const double ITEM = 1, MB = 1.0 / 144, PER_RUN = 0, PRECIOUS = 16;
 // what a route is scored by: what it uses up, made worse by how many steps it takes (each step 3%), so using
 // something held beats a long way to an equivalent, and a much longer route has to save a lot to win
 const double STEP = 0.03;
@@ -492,6 +494,7 @@ struct TreeBuild {
   int budget = 50000;
   // held things there's too little of and no way to make more: not used, so the plan backs out to another way
   const set<int> *scarce = nullptr;
+  int building = 0;  // how many machines being built the current branch is inside
   // what the plan is for: its top recipe is judged for this amount, not a typical one
   int root = -1;
   double root_qty = 0;
@@ -567,7 +570,10 @@ struct TreeBuild {
     // a machine the group has to build first: made like a tool, the step says it runs on it
     if (!owns(s, recipes[r])) {
       int m = machine_to_build(s, recipes[r]);
-      if (m < 0 || !add(m)) {
+      building++;
+      bool built = m >= 0 && add(m);
+      building--;
+      if (!built) {
         back_to(mark);
         return false;
       }
@@ -579,11 +585,34 @@ struct TreeBuild {
   }
   // give k a node, false if every way to it needs something being made higher up. make: k is held but not
   // enough, make it anyway (the node says how much is held, the plan makes the rest)
+  // does the node already planned for k need any of what's being made higher up (directly or further down)
+  bool needs_stack(int k) {
+    set<int> visited;
+    function<bool(int)> walk = [&](int x) {
+      if (!visited.insert(x).second) return false;
+      auto n = nodes.find(keys[x]);
+      if (n == nodes.end() || n->size() < 3) return false;
+      auto kids = (*n)[2];
+      if (n->size() >= 4 && (*n)[3].contains("machine")) kids.push_back((*n)[3]["machine"]);
+      for (auto &u : kids) {
+        if (u.is_null()) continue;
+        int c = key_index[u.get<string>()];
+        // held stock of what's being made, inside a machine the plan builds, is allowed (see add)
+        if (stack.count(c) && !(building > 0 && cost_of(s, c) == 0 && !wild[c])) return true;
+        if (walk(c)) return true;
+      }
+      return false;
+    };
+    return walk(k);
+  }
   bool add(int k, int force = -1, bool make = false) {
-    if (seen.count(k)) return true;
-    // something being made higher up that's also held (vacuum tubes for the extractor that makes what more vacuum
-    // tubes need): the held ones go in, no loop
-    if (stack.count(k)) return cost_of(s, k) == 0 && !wild[k];
+    // already planned: reuse it, unless it needs what's being made higher up (that would be a loop: more
+    // annealed copper ingots from macerating the wire the plan makes out of annealed copper ingots)
+    if (seen.count(k)) return !needs_stack(k);
+    // something being made higher up: a loop. except when it's held and goes into a machine the plan builds (the
+    // held vacuum tubes in the circuits of the extractor that makes what more vacuum tubes need). never into
+    // making more of itself (annealed copper ingots to a block to dust to annealed copper ingots)
+    if (stack.count(k)) return building > 0 && cost_of(s, k) == 0 && !wild[k];
     if (--budget < 0) return false;
     named.insert(k);
     int d = cost_of(s, k);
