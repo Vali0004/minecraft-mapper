@@ -581,7 +581,10 @@ struct TreeBuild {
   // enough, make it anyway (the node says how much is held, the plan makes the rest)
   bool add(int k, int force = -1, bool make = false) {
     if (seen.count(k)) return true;
-    if (stack.count(k) || --budget < 0) return false;
+    // something being made higher up that's also held (vacuum tubes for the extractor that makes what more vacuum
+    // tubes need): the held ones go in, no loop
+    if (stack.count(k)) return cost_of(s, k) == 0 && !wild[k];
+    if (--budget < 0) return false;
     named.insert(k);
     int d = cost_of(s, k);
     if (d >= INF) {
@@ -1156,6 +1159,10 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   // when there's no way does the plan build machines
   shared_ptr<Solved> now = solved(group, false), build = solved(group, true);
   shared_ptr<Solved> s = now->dist[k] < INF ? now : build;
+  // a recipe picked to plan with that only works by building a machine somewhere along it: plan with building
+  auto runs = [&](const Solved &v, int r) { return plannable[r] && machine_ok(v, recipes[r]) && run_cost(v, recipes[r]) < INFINITY; };
+  bool pick = force >= 0 && force < (int)recipes.size() && find(made_by[k].begin(), made_by[k].end(), force) != made_by[k].end();
+  if (pick && !runs(*s, force) && runs(*build, force)) s = build;
   set<int> named{k};
   json out;
   out["key"] = key;
@@ -1205,8 +1212,13 @@ string recipes_item_json(const string &key, const string &group, int force, doub
     rj["id"] = r;
     // what one of it uses up of the group's holdings going this way, all the way down
     // the same score the plan picks by, from the same solve (the machines the group has, when that works)
-    const Solved &by = machine_ok(*s, recipes[r]) ? *s : *build;
-    double c = state / 2 == 0 && plannable[r] ? route_score(by, recipes[r], k, qty) : INFINITY;
+    // scored from what the plan uses (the machines the group has, when that works), otherwise with building
+    // machines along the way, and then the card says so
+    double c = state / 2 == 0 && plannable[r] ? route_score(*s, recipes[r], k, qty) : INFINITY;
+    if (c == INFINITY && state / 2 == 0 && plannable[r] && s != build) {
+      c = route_score(*build, recipes[r], k, qty);
+      if (c < INFINITY) rj["needs_build"] = true;
+    }
     rj["cost"] = c == INFINITY ? json(nullptr) : json(c);
     producers.push_back(rj);
   }
@@ -1214,9 +1226,7 @@ string recipes_item_json(const string &key, const string &group, int force, doub
   out["producers_total"] = made_by[k].size();
   // the group's thriftiest route, as a tree, or the one through the recipe the page picked
   bool forced = false;
-  if (force >= 0 && force < (int)recipes.size() && find(made_by[k].begin(), made_by[k].end(), force) != made_by[k].end() &&
-      machine_ok(*s, recipes[force]) && run_cost(*s, recipes[force]) < INFINITY)
-    forced = true;
+  if (pick && runs(*s, force)) forced = true;
   json nodes = json::object(), jr = json::object();
   set<int> seen;
   auto gi = snapshot.groups.find(group);

@@ -498,7 +498,9 @@ function howTo(r, key, qty) {
     const ins = uses.map((u, j) => {
       if (!u) return [null, 0];
       const c = p.canon(u);
-      return [c, rc.in[j], { tag: p.step.has(c) ? `${p.step.get(c)}` : "", kept: rc.in[j] === 0 }];
+      // made in an earlier step: say which. the thing being planned used further down (held vacuum tubes in the
+      // circuits for a machine the plan builds) comes from what's held, no tag
+      return [c, rc.in[j], { tag: p.step.has(c) && p.step.get(c) < i + 1 ? `${p.step.get(c)}` : "", kept: rc.in[j] === 0 }];
     });
     li.append(drawRecipe(rc, ins, 1));
     if (times > 1) li.append(el("div", "muted", `Shown for one run, it makes ${rc.out.filter(o => o[0] === k).map(o => amount(k, o[1])).join(", ")}.`));
@@ -526,8 +528,9 @@ function altCard(p, key, best) {
   const cls = p.state === "ready" ? "ready" : p.state === "no machine" ? "nomachine" : "missingb";
   h.append(el("strong", null, machine(p)));
   if (power(p)) h.append(el("span", "muted", power(p)));
-  h.append(el("span", "badge " + cls, p.state === "ready" ? (p.build ? "you can make it, once you build the machine" : "you can make it now") : p.state === "no machine" ? "no machine for it, and you can't build one yet" : "missing ingredients"));
+  h.append(el("span", "badge " + cls, p.state === "ready" ? (p.build || p.needs_build ? "you can make it, once you build a machine" : "you can make it now") : p.state === "no machine" ? "no machine for it, and you can't build one yet" : "missing ingredients"));
   if (p.build) { const b = el("span", "chip build"); b.append("build: ", itemLink(p.build)); h.append(b); }
+  else if (p.needs_build) h.append(el("span", "chip build", "for something it needs, plan with it to see which"));
   if (p.recycling) h.append(el("span", "chip recycle", "takes something apart"));
   const y = p.yield;
   h.append(el("span", "yield", `${amount(key, y.per)} per run` + (y.ratio !== null ? ` · ${fmt(y.ratio * 100)}% of ${isFluid(key) ? "fluid" : "items"} in` : "")));
